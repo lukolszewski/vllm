@@ -80,8 +80,10 @@ def e4m3_bits_to_f16(b):
     e = (c >> 3) & 0xF
     m = c & 0x7
     nrm = (s | ((e + 8) << 10) | (m << 7)).to(tl.float16, bitcast=True)
+    # subnormal: m * 2^-9 is exact in fp16; apply the sign through the bits so
+    # that -0.0 (code 0x80) keeps its sign (a float negation would fold it).
     sub = (m.to(tl.float32) * 0.001953125).to(tl.float16)
-    sub = tl.where(s != 0, -sub, sub)
+    sub = (sub.to(tl.uint16, bitcast=True) | s).to(tl.float16, bitcast=True)
+    nan = (s | 0x7E00).to(tl.float16, bitcast=True)  # quiet NaN, sign kept
     r = tl.where(e == 0, sub, nrm)
-    nan = (r - r) / (r - r)  # NaN of the same dtype without a NaN literal
     return tl.where((e == 15) & (m == 7), nan, r)
