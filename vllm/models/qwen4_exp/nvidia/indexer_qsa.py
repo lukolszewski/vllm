@@ -306,7 +306,14 @@ class QSAIndexer(nn.Module):
                 dtype=self.indexer_dtype,
             )
             main_kv_cache = attn.kv_cache.transpose(1, 2)
-            if attn.kv_cache_dtype in ("fp8", "fp8_e4m3") and not emulate_e4m3():
+            # int8 KV keeps its per-(token, head) scales inside the page and is
+            # passed unchanged; the e4m3 reinterpretation must never apply to it.
+            is_int8_kv = attn.kv_cache_dtype == "int8_per_token_head"
+            if (
+                not is_int8_kv
+                and attn.kv_cache_dtype in ("fp8", "fp8_e4m3")
+                and not emulate_e4m3()
+            ):
                 # Under emulation the uint8 storage is passed as is.
                 main_kv_cache = main_kv_cache.view(torch.float8_e4m3fn)
             main_outputs = qsa_prepare(

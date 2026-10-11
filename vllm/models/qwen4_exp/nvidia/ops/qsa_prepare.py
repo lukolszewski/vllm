@@ -104,6 +104,41 @@ def _store_rotated(dst, y, o1, o2, scale):
     tl.store(dst + HALF + rot, _to_dst_dtype(o2, dst, scale))
 
 
+@triton.jit
+def _quant_int8(x, scale):
+    """Quantize with round-half-away-from-zero, then clamp to the int8 range."""
+    q = x * (1.0 / scale)
+    q = tl.where(q >= 0, q + 0.5, q - 0.5)
+    return tl.clamp(q, -128.0, 127.0).to(tl.int8)
+
+
+@triton.jit
+def _store_rotated_int8(dst, y, o1, o2):
+    """Store a rotated head as int8 plus one fp32 absmax scale in the pad.
+
+    ``dst`` points at an int8 slot laid out as ``[int8[MAIN_D] | f32 scale]``.
+    The row is the same three pieces ``_store_rotated`` writes (``o1`` at
+    ``[0, HALF)``, ``o2`` at ``[HALF, 2 * HALF)``, ``y`` for ``dims >= 2 * HALF``),
+    each first rounded to BF16 like ``_to_dst_dtype`` does for every dtype, and
+    all three share one scale (per token, per head) taken over the bf16 values.
+    """
+    HALF: tl.constexpr = o1.shape[0]
+    MAIN_D: tl.constexpr = y.shape[0]
+    dims = tl.arange(0, MAIN_D)
+    rot = tl.arange(0, HALF)
+    y = y.to(tl.bfloat16).to(tl.float32)
+    o1 = o1.to(tl.bfloat16).to(tl.float32)
+    o2 = o2.to(tl.bfloat16).to(tl.float32)
+    tail_amax = tl.max(tl.where(dims >= 2 * HALF, tl.abs(y), 0.0))
+    amax = tl.maximum(tl.maximum(tl.max(tl.abs(o1)), tl.max(tl.abs(o2))), tail_amax)
+    scale = tl.maximum(amax / 127.0, 1e-6)
+    tl.store(dst + dims, _quant_int8(y, scale), mask=dims >= 2 * HALF)
+    tl.store(dst + rot, _quant_int8(o1, scale))
+    tl.store(dst + HALF + rot, _quant_int8(o2, scale))
+    scale_ptr = (dst + MAIN_D).to(tl.pointer_type(tl.float32), bitcast=True)
+    tl.store(scale_ptr, scale)
+
+
 @triton.jit(
     do_not_specialize=[
         "num_tokens",
@@ -173,6 +208,7 @@ def _qsa_prepare_kernel(
     MAIN_HQ: tl.constexpr,
     MAIN_HK: tl.constexpr,
     MAIN_D: tl.constexpr,
+    MAIN_PAD: tl.constexpr,
     MAIN_PAGE_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -228,9 +264,23 @@ def _qsa_prepare_kernel(
                     + (slot % MAIN_PAGE_SIZE) * main_cache_stride_token
                     + kv_head * main_cache_stride_head
                 )
-                _store_rotated(dst, y, o1, o2, main_k_scale)
-                v = tl.load(src + MAIN_HK * MAIN_D + dims)
-                tl.store(dst + MAIN_D + dims, _to_dst_dtype(v, dst, main_v_scale))
+                if dst.dtype.element_ty == tl.int8:
+                    _store_rotated_int8(dst, y, o1, o2)
+                    v = tl.load(src + MAIN_HK * MAIN_D + dims)
+                    v = v.to(tl.bfloat16).to(tl.float32)
+                    v_scale = tl.maximum(tl.max(tl.abs(v)) / 127.0, 1e-6)
+                    tl.store(dst + MAIN_D + MAIN_PAD + dims, _quant_int8(v, v_scale))
+                    v_scale_ptr = (
+                        dst + 2 * MAIN_D + MAIN_PAD
+                    ).to(tl.pointer_type(tl.float32), bitcast=True)
+                    tl.store(v_scale_ptr, v_scale)
+                else:
+                    _store_rotated(dst, y, o1, o2, main_k_scale)
+                    v = tl.load(src + MAIN_HK * MAIN_D + dims)
+                    tl.store(
+                        dst + MAIN_D + MAIN_PAD + dims,
+                        _to_dst_dtype(v, dst, main_v_scale),
+                    )
         else:
             out = (token * MAIN_HQ + head) * MAIN_D
             _store_rotated(main_q_out_ptr + out, y, o1, o2, None)
@@ -540,7 +590,10 @@ def qsa_prepare(
     and returns its Q and gate.
     """
     num_tokens = q.shape[0]
-    main_head_dim = main_kv_cache.shape[-1] // 2
+    # An int8 page carries one fp32 scale after each half: the content dim is
+    # 2 * (head_dim + 4) bytes-wide elements, every other dtype is unpadded.
+    main_pad = 4 if main_kv_cache.dtype == torch.int8 else 0
+    main_head_dim = main_kv_cache.shape[-1] // 2 - main_pad
     num_main_kv_heads = main_kv_cache.shape[2]
     num_main_q_heads = main_qkv.shape[1] // (2 * main_head_dim) - num_main_kv_heads
     main_q_out = main_qkv.new_empty(num_tokens, num_main_q_heads, main_head_dim)
@@ -575,6 +628,10 @@ def qsa_prepare(
     assert main_qkv.shape == (num_tokens, qkv_width)
     assert main_qkv.stride(-1) == 1
     assert main_slot_mapping.shape == (num_tokens,)
+    assert main_kv_cache.shape[-1] == 2 * (main_head_dim + main_pad)
+    # The kernel addresses the slot's content with a unit stride on the last
+    # dim (the pads are interior, reached through MAIN_PAD offsets).
+    assert main_kv_cache.stride(-1) == 1
 
     if num_tokens <= 4096:
         TILE_T_Q, TILE_H_Q = 2, 2
@@ -644,6 +701,7 @@ def qsa_prepare(
         MAIN_HQ=num_main_q_heads,
         MAIN_HK=num_main_kv_heads,
         MAIN_D=main_head_dim,
+        MAIN_PAD=main_pad,
         MAIN_PAGE_SIZE=main_kv_cache.shape[1],
         num_warps=1,
     )
