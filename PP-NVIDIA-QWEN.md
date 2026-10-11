@@ -134,9 +134,46 @@ session per row, prefix caching on, distinct prompts per run (no cache hits):
 bf16 with the PLE on SSD prefills as fast as the original pinned-PLE bf16 runs
 (7,630 tok/s at 50k), so `host_file_gather` itself costs nothing measurable; the
 3.3x prefill gap is the software e4m3 path of item 4 (the only difference between the
-two columns). A native-speed e4m3 load path in the QSA kernels would close it. Raw
+two columns). The int8 KV mode below closes most of it. Raw
 logs and JSON for both windows are in the `vllm-pp6` run directories referenced from
 https://github.com/lukolszewski/llama.cpp-multigpu/pull/7.
+
+## int8 KV (q8): `--kv-cache-dtype int8_per_token_head`
+
+Software e4m3 costs the 3090s 3.3x on prefill. vLLM's `int8_per_token_head` cache
+mode (int8 values plus one fp32 absmax scale per token and kv head for K and for V,
+inline in the page: 2 * (head_dim + 4) bytes per token per head) needs only a native
+int8 -> bf16 cast and one multiply per column, so the QSA kernels now accept it on
+branch `q8-kv` (commit 7764de958): the backend publishes the padded page via
+`customize_spec`, `qsa_int8_cache_views()` carves the narrowed K/V views and the scale
+views, the fused prepare kernel quantizes after norm + RoPE and writes the scales into
+the page (`_store_rotated_int8`), and the sparse paged attention kernel folds `k_scale`
+into the scores and applies `v_scale` to the softmax weights (`IS_INT8`). The unfused
+`reshape_and_cache` store path is not implemented for int8 (the fused prepare is the
+default). Kernel tests against a torch oracle and the bf16 kernel live in the airun
+`vllm-pp6/work/P12d` directory; on an RTX 5060 Ti with e4m3 emulated the sparse
+attention kernel at 4096 rows x top-2048 took 1.28x the bf16 time (software e4m3:
+1.97x) and the prepare kernel the same time as bf16.
+
+Measured 2026-10-12 on the six 3090s, PLE on SSD, `--max-num-seqs 7`, prefix caching on:
+
+| | int8 KV (`--max-num-seqs 7`) | bf16 KV (`--max-num-seqs 4`) | fp8 KV (`--max-num-seqs 5`) |
+|---|---|---|---|
+| load to `/health` | 225 s | 240 s | 270 s |
+| GPU KV cache | 1,922,389 tokens (7.33 x 262k) | 1,057,462 (4.03 x) | 1,950,576 (7.44 x) |
+| prefill 50k / 250k tokens | 6,506 / 6,574 tok/s | 7,831 / 7,550 | 2,260-2,295 / 2,377-2,394 |
+| TTFT 50k / 250k | 7.6 / 37.8 s | 6.3 / 33 s | 22 / 104 s |
+| decode 50k / 250k (1 session) | 56.5 / 57.6 tok/s | 55.1 / 56.7 | 54.9-56.2 / 56.5-57.0 |
+| 250k x 128 tokens, N sessions decoding together (per session / sum) | 7: 29.4 / 206; 5: 37.9 / 190; 3: 44.2 / 133 | 4: 38.6 / 154 | 5: 25.7 / 128 |
+| needle 50k / 200k | PASS / PASS | PASS / PASS | PASS / PASS |
+
+int8 keeps 83-87 % of the bf16 prefill with 1.8x its KV capacity, and under load it
+decodes faster than fp8 (the e4m3 software decode also cost ~25 % at 5 sessions).
+Accuracy: int8 per-token-head keeps 7+ significant bits against e4m3's 3 mantissa bits;
+the kernel's output error versus an exact f32 reference equals the dequantization error
+and is 7-13x below e4m3's. Launcher: `KV_DTYPE=int8_per_token_head PARALLEL=7` in
+`run-qwen38-vllm-6x3090-260k.sh` (airun), or `run-qwen38-7-users-slow-vLLM-260k.sh`
+(which now defaults to it).
 
 ## Amending
 
