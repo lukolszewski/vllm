@@ -53,3 +53,18 @@ https://github.com/lukolszewski/llama.cpp-multigpu/pull/6.
 Known limits: five concurrent greedy requests are not byte-identical to their solo
 runs (batch-composition nondeterminism, outputs stay coherent); model load to
 healthy takes 6-8 minutes; the AMD `model_state` change is untested.
+
+## Relation to alanoo81/flashnext-v620-pp3
+
+That fork ran the model at PP=3 on Radeon V620s on a September 2026 vLLM. Of its six
+PP patches only the model_state guard removal is still relevant here (this branch keeps
+a partition check instead of deleting the guard). The gpu_worker / gpu_model_runner
+guards, the `ple_offload` worker and its import fix are gone from upstream (PLE host
+offload is now `EngramConfig.cpu_offload`), and the HC-mixer weight skipping on
+non-last ranks is upstreamed. The config-verifier guard, the GPTQ loading fixes and
+the KV-cache projection fix in this branch did not exist as problems in that tree.
+
+## Amending
+
+The three code commits are independent; `git diff 7d0b4e57a -- vllm/` reproduces the
+seven-file overlay that can be bind-mounted over the stock nightly image.
