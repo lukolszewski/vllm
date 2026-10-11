@@ -12,6 +12,10 @@ from vllm.model_executor.warmup.jit_warmup_triton_helper import (
     TritonWarmupTensor,
     triton_scalar_specialization_rep,
 )
+from vllm.models.qwen4_exp.nvidia.ops.fp8_ampere import (
+    e4m3_bits_to_f16,
+    emulate_e4m3,
+)
 from vllm.platforms import current_platform
 from vllm.triton_utils import HAS_TRITON, tl, triton
 
@@ -152,8 +156,12 @@ def _qsa_sparse_paged_gqa_splitk_kernel(
         )
         if IS_FP8:
             # e4m3 -> Q dtype is exact; keep the QK dot in Q's dtype (fp8 QK
-            # measured slower here and less accurate).
-            keys = keys.to(query.dtype)
+            # measured slower here and less accurate). On sm < 89 the cache
+            # arrives as uint8 e4m3 codes and is decoded in software.
+            if keys.dtype == tl.uint8:
+                keys = e4m3_bits_to_f16(keys).to(query.dtype)
+            else:
+                keys = keys.to(query.dtype)
         scores = tl.dot(query, keys)
         # Scaling scores avoids re-quantizing a scaled query to BF16; for fp8
         # caches the K dequant scale is already folded into softmax_scale on the
@@ -169,7 +177,11 @@ def _qsa_sparse_paged_gqa_splitk_kernel(
             # Dequant V to fp16 (not bf16) for the PV dot: P <= 1 (online
             # softmax) so fp16 has the range, its wider mantissa is more
             # accurate, and the fp8->fp16 upcast with an fp16 PV dot is faster.
-            values = values.to(tl.float16)
+            # Under software emulation the codes are uint8 and decode to fp16.
+            if values.dtype == tl.uint8:
+                values = e4m3_bits_to_f16(values)
+            else:
+                values = values.to(tl.float16)
         accumulator = tl.dot(
             probabilities.to(values.dtype),
             values,
@@ -636,7 +648,8 @@ def qsa_sparse_paged_attention(
     assert head_dim >= 16 and (head_dim & (head_dim - 1)) == 0
     assert q.dtype == torch.bfloat16
     assert k_cache.dtype == v_cache.dtype
-    is_fp8 = k_cache.dtype == torch.float8_e4m3fn
+    # uint8 == the same e4m3fn bytes, converted in software (sm < 89).
+    is_fp8 = k_cache.dtype in (torch.float8_e4m3fn, torch.uint8)
     if is_fp8:
         assert k_scale is not None and v_scale is not None
         # Host pre-multiply: fold the K dequant scale into the attention scale
@@ -770,7 +783,11 @@ def warmup_qsa_sparse_paged_attention(
     key_cache, value_cache = kv_cache.transpose(1, 2).split(head_dim, dim=-1)
     # An fp8 cache is allocated as uint8 and viewed as e4m3 at attention time.
     is_fp8 = kv_cache.dtype == torch.uint8
-    cache_dtype = torch.float8_e4m3fn if is_fp8 else key_cache.dtype
+    cache_dtype = (
+        (torch.uint8 if emulate_e4m3() else torch.float8_e4m3fn)
+        if is_fp8
+        else key_cache.dtype
+    )
     num_kv_heads = key_cache.shape[2]
     group_size = num_query_heads // num_kv_heads
     block_m = triton.next_power_of_2(group_size)

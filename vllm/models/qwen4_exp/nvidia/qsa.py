@@ -61,6 +61,7 @@ from vllm.v1.kv_cache_interface import (
 from ..common.qsa_cache import QSAForwardMetadata
 from . import model
 from .indexer_qsa import QSAIndexer
+from .ops.fp8_ampere import emulate_e4m3
 
 
 class Qwen4ExpQSAQKVIndexerLinear(MergedColumnParallelLinear):
@@ -295,11 +296,15 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
         token_to_req = token_to_req[:num_tokens]
         key_cache, value_cache = kv_cache.transpose(1, 2).split(self.head_size, dim=-1)
         k_scale = v_scale = None
-        if self.kv_cache_dtype in ("fp8", "fp8_e4m3"):
+        is_fp8 = self.kv_cache_dtype in ("fp8", "fp8_e4m3")
+        if is_fp8:
             # The cache is allocated as uint8; reinterpret the e4m3 bytes
-            # (same itemsize, so shape and strides are preserved).
-            key_cache = key_cache.view(torch.float8_e4m3fn)
-            value_cache = value_cache.view(torch.float8_e4m3fn)
+            # (same itemsize, so shape and strides are preserved). On sm < 89
+            # (no Triton e4m3 cast) the uint8 view is passed as is and the
+            # kernels convert the codes in software.
+            if not emulate_e4m3():
+                key_cache = key_cache.view(torch.float8_e4m3fn)
+                value_cache = value_cache.view(torch.float8_e4m3fn)
             # Host-side per-tensor dequant scales (Python floats), as used by
             # other host-scale backends; folded into the kernel's scales.
             k_scale = layer._k_scale_float
@@ -307,7 +312,7 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
         if query.dtype != torch.bfloat16 or key_cache.dtype not in (
             torch.bfloat16,
             torch.float8_e4m3fn,
-        ):
+        ) and not (is_fp8 and key_cache.dtype == torch.uint8):
             raise NotImplementedError(
                 "Qwen4Exp QSA requires BF16 Q and BF16 or FP8-e4m3 K/V"
             )

@@ -4,6 +4,7 @@
 
 import torch
 
+from vllm.models.qwen4_exp.nvidia.ops.fp8_ampere import f32_to_e4m3_bits
 from vllm.triton_utils import tl, triton
 
 
@@ -87,6 +88,8 @@ def _to_dst_dtype(x, dst, scale):
     x = x.to(tl.bfloat16)
     if out_ty == tl.float8e4nv:
         x = x.to(tl.float32) / scale
+    elif out_ty == tl.uint8:  # Ampere: e4m3 emulated in software, cache uint8
+        return f32_to_e4m3_bits(x.to(tl.float32) / scale)
     return x.to(out_ty)
 
 

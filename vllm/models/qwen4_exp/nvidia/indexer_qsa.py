@@ -21,6 +21,7 @@ from ..common.qsa_cache import (
     QSAKeyStateCache,
     canonical_qsa_rope_positions,
 )
+from .ops.fp8_ampere import emulate_e4m3
 from .ops.qsa_prepare import qsa_prepare
 
 if TYPE_CHECKING:
@@ -305,7 +306,8 @@ class QSAIndexer(nn.Module):
                 dtype=self.indexer_dtype,
             )
             main_kv_cache = attn.kv_cache.transpose(1, 2)
-            if attn.kv_cache_dtype in ("fp8", "fp8_e4m3"):
+            if attn.kv_cache_dtype in ("fp8", "fp8_e4m3") and not emulate_e4m3():
+                # Under emulation the uint8 storage is passed as is.
                 main_kv_cache = main_kv_cache.view(torch.float8_e4m3fn)
             main_outputs = qsa_prepare(
                 projected_q,
