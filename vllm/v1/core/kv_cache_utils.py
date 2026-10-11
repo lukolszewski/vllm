@@ -1644,8 +1644,17 @@ def get_kv_cache_config_from_groups(
         group_spec = group.kv_cache_spec
         layers_by_spec: defaultdict[KVCacheSpec, list[str]] = defaultdict(list)
         if isinstance(group_spec, UniformTypeKVCacheSpecs):
+            # vllm-pp6 overlay: under pipeline parallelism a group can be empty on
+            # this worker while still carrying the *global* UniformTypeKVCacheSpecs
+            # (see _project_kv_cache_groups_to_worker, which only rebuilds the spec
+            # when worker_layer_names is non-empty).  Iterating every layer of that
+            # spec puts other ranks' layers into this worker's KVCacheTensors and
+            # allocate_kv_cache() then fails with StopIteration looking the layer up
+            # in the worker's groups.  Only emit layers that live on this worker.
+            worker_layers = set(group.layer_names)
             for layer_name, spec in group_spec.kv_cache_specs.items():
-                layers_by_spec[spec].append(layer_name)
+                if layer_name in worker_layers:
+                    layers_by_spec[spec].append(layer_name)
         elif group.layer_names:
             layers_by_spec[group_spec].extend(group.layer_names)
 
