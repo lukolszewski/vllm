@@ -24,7 +24,10 @@ n-gram table from SSD instead of pinned host RAM:
    handed to Triton as uint8 views and the pointer element type picks the branch at
    compile time. The byte format is unchanged, sm >= 89 is untouched. Proven bitwise
    against the native cast on an RTX 5060 Ti (helpers, `qsa_prepare` cache bytes,
-   `qsa_sparse_paged_attention` outputs) and end-to-end on the six 3090s.
+   `qsa_sparse_paged_attention` outputs) and end-to-end on the six 3090s. It is not
+   free: the software conversion costs about 3.3x on prefill (2.3k vs 7.8k tok/s at
+   50k tokens, 250k TTFT 104 s vs 33 s) while decode is unchanged; what it buys is KV
+   capacity, 7.44x vs 4.03x of 262k on the six 3090s (table below).
 
 5. **PLE table on SSD (`host_file_gather`)** — port of upstream PR #58815. With
    `--engram-config '{"host_file_gather": true}'` the 102 GB BF16 PLE n-gram table is
@@ -55,18 +58,20 @@ vllm serve /path/to/Qwen3.8-Flash-Next-GPTQ-4bit \
   --served-model-name qwen3.8-flash-next --dtype bfloat16 \
   --pipeline-parallel-size 6 --tensor-parallel-size 1 \
   --distributed-executor-backend mp \
-  --max-model-len 262144 --max-num-seqs 5 --gpu-memory-utilization 0.92 \
+  --max-model-len 262144 --max-num-seqs 4 --gpu-memory-utilization 0.92 \
   --engram-config '{"host_file_gather": true}' \
-  --kv-cache-dtype fp8 --trust-remote-code
+  --trust-remote-code
 ```
 
 The partition must sum to the layer count (48) and its first entry must be >= 2 so
 that the PLE layer (index 1) is on stage 0. With `host_file_gather` the 102 GB BF16
 PLE table stays on disk (container RSS ~28 GB); with `{"cpu_offload": true}` instead
 it is pinned in host RAM (RSS ~143 GB). The KV cache at this setting holds about
-1.0M tokens in bf16 across the six GPUs; with `--kv-cache-dtype fp8` it holds
-1,950,576 tokens (7.44 x 262k), decode speed unchanged (~55 tok/s), needle passes at
-50k/200k, five concurrent 250k-token sessions all resident.
+1.06M tokens in bf16 across the six GPUs (4.03 x 262k). Adding `--kv-cache-dtype fp8
+--max-num-seqs 5` raises that to 1,950,576 tokens (7.44 x 262k) with decode speed
+unchanged (~55 tok/s), needle passing at 50k/200k and five concurrent 250k-token
+sessions resident, at the price of ~3.3x slower prefill on these Ampere cards (see
+"PLE on SSD / fp8 KV"). bf16 is the default here; fp8 is the capacity option.
 
 Measured on that box (1 session, 250k-token prompt, 128 greedy tokens): ~9,000 tok/s
 prefill and ~58 tok/s decode; needle-in-haystack passes at 50k and 200k. Full grid,
@@ -107,11 +112,30 @@ shards on a PCIe 4 NVMe, 57k random 4 KiB reads/s).
 | needle 50k / 200k | PASS / PASS | PASS / PASS |
 
 The 102 GB table becomes page cache instead of anonymous memory, so it is evicted
-under pressure and re-read on demand; the first requests after a cold start pay
-NVMe latency for the rows they touch. `cat ple-*.safetensors > /dev/null` before
-starting pre-warms the cache. The fp8 KV path (item 4) and `host_file_gather`
-(item 5) were proven together in the same run; raw logs and JSON are in the
-`vllm-pp6` run directories referenced from
+under pressure and re-read on demand. In practice the page cache held most of the
+table across restarts: a second window measured prefill and decode at 50k and 250k
+tokens on a "cold" start (first start after hours of other serving) and again after
+`cat ple-*.safetensors > /dev/null` (68 s, i.e. mostly cached already), and the two
+differed by at most 1.5 % in either direction, so no pre-warm step is needed.
+
+The same window ran the fp8-vs-bf16 KV comparison, both with the PLE on SSD, one
+session per row, prefix caching on, distinct prompts per run (no cache hits):
+
+| | fp8 KV (`--max-num-seqs 5`) | bf16 KV (`--max-num-seqs 4`) |
+|---|---|---|
+| load to `/health` | 270 s | 240 s |
+| GPU KV cache | 1,950,576 tokens (7.44 x 262k) | 1,057,462 tokens (4.03 x 262k) |
+| prefill 50k / 250k tokens | 2,260-2,295 / 2,377-2,394 tok/s | 7,831 / 7,550 tok/s |
+| TTFT 50k / 250k | 22 / 104 s | 6.3 / 33 s |
+| decode 50k / 250k (1 session) | 54.9-56.2 / 56.5-57.0 tok/s | 55.1 / 56.7 tok/s |
+| 250k x 128 tokens, all seats busy | 5 sessions: 25.7 tok/s each, 78.6 aggregate | 4 sessions: 38.6 tok/s each, 83.0 aggregate |
+| host `free -g` available idle | 141 GiB | 142 GiB |
+
+bf16 with the PLE on SSD prefills as fast as the original pinned-PLE bf16 runs
+(7,630 tok/s at 50k), so `host_file_gather` itself costs nothing measurable; the
+3.3x prefill gap is the software e4m3 path of item 4 (the only difference between the
+two columns). A native-speed e4m3 load path in the QSA kernels would close it. Raw
+logs and JSON for both windows are in the `vllm-pp6` run directories referenced from
 https://github.com/lukolszewski/llama.cpp-multigpu/pull/7.
 
 ## Amending
