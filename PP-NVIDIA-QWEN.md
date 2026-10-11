@@ -1,9 +1,9 @@
 # pp-nvidia-qwen: pipeline-parallel Qwen3.8-Flash-Next (Qwen4Exp) on NVIDIA GPUs
 
 This branch is upstream vLLM at commit `7d0b4e57a` (nightly 0.31.1rc1.dev253, 2026-10-09)
-plus three commits that make Qwen4Exp models (Qwen3.8-Flash-Next) run with
-`--pipeline-parallel-size > 1`, and load GPTQ checkpoints that quantize only the
-Linear layers:
+plus commits that make Qwen4Exp models (Qwen3.8-Flash-Next) run with
+`--pipeline-parallel-size > 1`, load GPTQ checkpoints that quantize only the
+Linear layers, and use `--kv-cache-dtype fp8` on Ampere GPUs:
 
 1. **Allow PP when the PLE layer stays on stage 0** — the model-config verifier and
    both `model_state` modules refused PP outright. They now require
@@ -15,10 +15,19 @@ Linear layers:
 3. **KV-cache allocation under PP** — `get_kv_cache_config_from_groups` emitted
    tensors for layers living on other ranks, which killed the non-first workers
    with `StopIteration` (`vllm/v1/core/kv_cache_utils.py`).
+4. **fp8 (e4m3) KV cache on sm < 89** — Triton 3.7 has no `fp8e4nv` conversion on
+   Ampere, so `--kv-cache-dtype fp8` crashed every QSA kernel on the RTX 3090 with
+   `ValueError("type fp8e4nv not supported in this architecture")`. New
+   `nvidia/ops/fp8_ampere.py` converts e4m3fn <-> f32/f16 in software (RNE, saturate
+   to 448, NaN preserved); on sm < 89 (or `VLLM_QSA_EMULATE_E4M3=1`) the caches are
+   handed to Triton as uint8 views and the pointer element type picks the branch at
+   compile time. The byte format is unchanged, sm >= 89 is untouched. Proven bitwise
+   against the native cast on an RTX 5060 Ti (helpers, `qsa_prepare` cache bytes,
+   `qsa_sparse_paged_attention` outputs) and end-to-end on the six 3090s.
 
 Only Python files change; the branch runs on the stock
 `vllm/vllm-openai:cu129-nightly-7d0b4e57aac4c4323225b0eee9ae960ce75ffffe` image by
-bind-mounting the seven files over `/usr/local/lib/python3.12/dist-packages/vllm/`
+bind-mounting the changed files over `/usr/local/lib/python3.12/dist-packages/vllm/`
 (or by installing this tree). That nightly image's torchcodec links a missing
 `libnvrtc.so.13` and breaks `vllm serve` at import; `pip uninstall -y torchcodec`
 in a derived image fixes it.
@@ -43,7 +52,9 @@ vllm serve /path/to/Qwen3.8-Flash-Next-GPTQ-4bit \
 The partition must sum to the layer count (48) and its first entry must be >= 2 so
 that the PLE layer (index 1) is on stage 0. With `cpu_offload` the 102 GB BF16 PLE
 table lives in host RAM (container RSS ~143 GB). The KV cache at this setting holds
-about 1.0M tokens in bf16 across the six GPUs.
+about 1.0M tokens in bf16 across the six GPUs; with `--kv-cache-dtype fp8` it holds
+1,835,008 tokens (7 x 262k), decode speed unchanged (~55 tok/s), needle passes at
+50k/200k, five concurrent 250k-token sessions all resident.
 
 Measured on that box (1 session, 250k-token prompt, 128 greedy tokens): ~9,000 tok/s
 prefill and ~58 tok/s decode; needle-in-haystack passes at 50k and 200k. Full grid,
@@ -66,5 +77,7 @@ the KV-cache projection fix in this branch did not exist as problems in that tre
 
 ## Amending
 
-The three code commits are independent; `git diff 7d0b4e57a -- vllm/` reproduces the
-seven-file overlay that can be bind-mounted over the stock nightly image.
+The code commits are independent; `git diff 7d0b4e57a --name-only -- vllm/` lists the
+overlay files (eleven, incl. the new `nvidia/ops/fp8_ampere.py`) that can be bind-mounted
+over the stock nightly image; a bind mount creates the mount point for a file the image
+does not have.
