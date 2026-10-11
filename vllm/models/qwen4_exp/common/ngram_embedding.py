@@ -162,6 +162,10 @@ class Qwen4ExpPLEEmbedding(PLEVocabParallelEmbedding, ABC):
         raise NotImplementedError
 
 
+# vllm-pp6 overlay: quant configs whose checkpoints leave the PLE table unquantized.
+_GPTQ_CONFIG_NAMES = frozenset({"AutoGPTQConfig", "GPTQConfig", "GPTQMarlinConfig"})
+
+
 class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
     """Quantization interface shared by resident and pinned PLE tables."""
 
@@ -178,6 +182,10 @@ class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
         if embedding_dtype == "float8_e4m3fn":
             return Qwen4ExpPLEFp8EmbeddingMethod()
         if quant_config is None:
+            return Qwen4ExpPLEUnquantizedEmbeddingMethod()
+        # vllm-pp6 overlay: GPTQ checkpoints (gptqmodel) quantize Linear layers only;
+        # the PLE n-gram table shards stay BF16, so use the unquantized method.
+        if type(quant_config).__name__ in _GPTQ_CONFIG_NAMES:
             return Qwen4ExpPLEUnquantizedEmbeddingMethod()
         if isinstance(quant_config, ModelOptMixedPrecisionConfig):
             if quant_config._resolve_quant_algo(prefix) == "FP8":

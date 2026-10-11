@@ -158,6 +158,15 @@ _EXTRA_WEIGHTS_MAPPER = WeightsMapper(
 )
 
 
+def _is_gptq(quant_config) -> bool:
+    """vllm-pp6 overlay: GPTQ-family quant configs (Linear-only quantization)."""
+    return type(quant_config).__name__ in (
+        "AutoGPTQConfig",
+        "GPTQConfig",
+        "GPTQMarlinConfig",
+    )
+
+
 class Qwen4ExpSparseMoeBlock(Qwen3NextSparseMoeBlock):
     """Qwen3Next MoE with Qwen4Exp HC validation."""
 
@@ -641,12 +650,20 @@ class Qwen4ExpForCausalLM(
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
         config: Qwen4ExpTextConfig = vllm_config.model_config.hf_text_config
-        if vllm_config.lora_config is not None:
+        if vllm_config.lora_config is not None or _is_gptq(vllm_config.quant_config):
             # LoRA does not support the merged QKV/indexer projection, so its
             # packed mapping must keep the indexer separate.
+            # vllm-pp6 overlay: same for GPTQ checkpoints, where q/k/v_proj are
+            # quantized but indexer.index_qk_proj is BF16 (see qsa.py).
             self.packed_modules_mapping = self.packed_modules_mapping | {
                 "qkv_proj": ["q_proj", "k_proj", "v_proj"],
             }
+            if vllm_config.quant_config is not None:
+                # configure_quant_config() copied the class-level mapping before
+                # __init__ ran; the fused-shard check must see this one.
+                vllm_config.quant_config.packed_modules_mapping = (
+                    self.packed_modules_mapping
+                )
         self.vllm_config = vllm_config
         self.model_config = vllm_config.model_config
         self.quant_config = vllm_config.quant_config
@@ -890,12 +907,20 @@ class Qwen4ExpForConditionalGeneration(
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "model") -> None:
         nn.Module.__init__(self)
         config: Qwen4ExpConfig = vllm_config.model_config.hf_config
-        if vllm_config.lora_config is not None:
+        if vllm_config.lora_config is not None or _is_gptq(vllm_config.quant_config):
             # LoRA does not support the merged QKV/indexer projection, so its
             # packed mapping must keep the indexer separate.
+            # vllm-pp6 overlay: same for GPTQ checkpoints, where q/k/v_proj are
+            # quantized but indexer.index_qk_proj is BF16 (see qsa.py).
             self.packed_modules_mapping = self.packed_modules_mapping | {
                 "qkv_proj": ["q_proj", "k_proj", "v_proj"],
             }
+            if vllm_config.quant_config is not None:
+                # configure_quant_config() copied the class-level mapping before
+                # __init__ ran; the fused-shard check must see this one.
+                vllm_config.quant_config.packed_modules_mapping = (
+                    self.packed_modules_mapping
+                )
         quant_config = vllm_config.quant_config
         multimodal_config = vllm_config.model_config.multimodal_config
         if multimodal_config is None:

@@ -494,7 +494,13 @@ class Qwen4ExpQSAAttention(Qwen3NextAttention, AttentionLayerBase):
         self.use_fused_qsa_prepare = (
             self.use_fused_qk_norm_rope_gate and self.indexer.use_fused_pre_indexer
         )
-        self.fuse_indexer_projection = vllm_config.lora_config is None
+        # vllm-pp6 overlay: GPTQ checkpoints quantize q/k/v_proj but keep
+        # indexer.index_qk_proj in BF16, so the shards cannot share one fused
+        # GPTQ layer; keep the indexer projection separate (as with LoRA).
+        self.fuse_indexer_projection = vllm_config.lora_config is None and (
+            type(quant_config).__name__
+            not in ("AutoGPTQConfig", "GPTQConfig", "GPTQMarlinConfig")
+        )
         if self.fuse_indexer_projection:
             self.index_qk_size = self.indexer.index_qk_proj.output_size
             self.qkv_proj = Qwen4ExpQSAQKVIndexerLinear(
