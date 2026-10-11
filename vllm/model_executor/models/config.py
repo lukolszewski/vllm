@@ -926,14 +926,17 @@ class Qwen4ExpForConditionalGenerationConfig(Qwen3_5ForConditionalGenerationConf
             raise NotImplementedError(
                 "Qwen4Exp PLE/QSA does not support dual-batch overlap or microbatching"
             )
-        # Checked again in Qwen4ExpModelState; rejecting it here keeps the
-        # engine from loading weights first.
+        # vllm-pp6 overlay: PP>1 is allowed; the PLE layer must stay on stage 0,
+        # which VLLM_PP_LAYER_PARTITION guarantees (checked in the
+        # Qwen4ExpModelState overlay). Only require that the partition is set.
         if text_config.ple_layer_ids and parallel_config.pipeline_parallel_size > 1:
-            raise NotImplementedError(
-                "Qwen4Exp N-gram PLE embedding requires pipeline_parallel_size=1 "
-                "because non-first pipeline ranks do not receive the raw input_ids "
-                "it needs. Please run with PP=1."
-            )
+            import os
+
+            if not os.environ.get("VLLM_PP_LAYER_PARTITION"):
+                raise NotImplementedError(
+                    "vllm-pp6: PP>1 with PLE needs VLLM_PP_LAYER_PARTITION set "
+                    "(first entry must exceed max(ple_layer_ids)-1)"
+                )
         multimodal_config = vllm_config.model_config.multimodal_config
         if multimodal_config is not None and multimodal_config.language_model_only:
             _strip_qwen4_exp_mrope(vllm_config.model_config)

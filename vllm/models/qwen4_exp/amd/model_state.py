@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Model-runner state for Qwen4Exp PLE inputs."""
 
+import os
 from typing import Any
 
 import torch
@@ -32,13 +33,22 @@ class Qwen4ExpModelState(MambaHybridModelState):
             self.ngram_eos_token_id = 0
             return
 
+        # vllm-pp6 overlay (port of alanoo81 flashnext-v620-pp3 patch 0001):
+        # allow PP>1; the PLE layer must stay on the first pipeline stage,
+        # which receives the raw input_ids. Enforced by VLLM_PP_LAYER_PARTITION.
         if vllm_config.parallel_config.pipeline_parallel_size > 1:
-            raise RuntimeError(
-                "N-gram PLE embedding currently requires "
-                "pipeline_parallel_size=1 because non-first pipeline ranks do "
-                "not receive the raw input_ids required by PLE. Please run "
-                "with PP=1."
-            )
+            first_stage_layers = None
+            part = os.environ.get("VLLM_PP_LAYER_PARTITION")
+            if part:
+                first_stage_layers = int(part.split(",")[0])
+            if first_stage_layers is not None and first_stage_layers <= max(
+                config.ple_layer_ids
+            ) - 1:
+                raise RuntimeError(
+                    "PLE layer must be on pipeline stage 0: first entry of "
+                    "VLLM_PP_LAYER_PARTITION must exceed "
+                    f"max(ple_layer_ids)-1={max(config.ple_layer_ids)-1}"
+                )
 
         self.ngram_context_len = int(config.ngram_size) - 1
         if self.ngram_context_len <= 0:
