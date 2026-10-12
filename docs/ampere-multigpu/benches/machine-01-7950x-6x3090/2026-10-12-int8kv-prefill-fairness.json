@@ -1,0 +1,62 @@
+{
+ "url": "http://localhost:8009",
+ "long_tokens": 230000,
+ "short_tokens": 3000,
+ "stagger_s": 10.0,
+ "rows": [
+  {
+   "tag": "short-solo",
+   "seed": 100,
+   "tokens": 3000,
+   "sent_at": 0.0,
+   "ttft": 1.1,
+   "wall": 1.25,
+   "chunks": 8
+  },
+  {
+   "tag": "long-solo",
+   "seed": 101,
+   "tokens": 230000,
+   "sent_at": 1.3,
+   "ttft": 42.02,
+   "wall": 42.09,
+   "chunks": 6
+  },
+  {
+   "tag": "short-B-behind-long",
+   "seed": 103,
+   "tokens": 3000,
+   "sent_at": 56.4,
+   "ttft": 2.33,
+   "wall": 8.74,
+   "chunks": 8
+  },
+  {
+   "tag": "long-A-with-short-behind",
+   "seed": 102,
+   "tokens": 230000,
+   "sent_at": 46.4,
+   "ttft": 40.29,
+   "wall": 40.36,
+   "chunks": 6
+  },
+  {
+   "tag": "long-C-with-long-behind",
+   "seed": 104,
+   "tokens": 230000,
+   "sent_at": 89.8,
+   "ttft": 67.13,
+   "wall": 73.44,
+   "chunks": 8
+  },
+  {
+   "tag": "long-D-behind-long",
+   "seed": 105,
+   "tokens": 230000,
+   "sent_at": 99.8,
+   "ttft": 70.21,
+   "wall": 70.26,
+   "chunks": 6
+  }
+ ]
+}

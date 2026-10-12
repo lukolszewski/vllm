@@ -103,6 +103,7 @@ vllm serve /models/Qwen3.8-Flash-Next-GPTQ-4bit \
   --kv-cache-dtype int8_per_token_head \
   --engram-config '{"host_file_gather": true}' \
   --kv-offloading-size 36 --kv-offloading-backend native \
+  --long-prefill-token-threshold 1024 \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml \
   --trust-remote-code
 ```
@@ -115,7 +116,11 @@ vllm serve /models/Qwen3.8-Flash-Next-GPTQ-4bit \
 - `--engram-config '{"cpu_offload": true}'` instead of `host_file_gather` pins the 102 GB table in RAM (the upstream
   default); it is not faster, measured.
 - Leave `--max-num-batched-tokens` at its default (2048 on 24 GB cards): 16384 halves the KV cache (activation memory),
-  8192 ran out of memory in the indexer prefill at 230k context (measured 2026-10-12).
+  8192 ran out of memory in the indexer prefill at 230k context (measured 2026-10-12). Add
+  `--long-prefill-token-threshold 1024` instead: while another request waits, a long prefill takes only half of each
+  step, so a 3k prompt sent behind a 230k one gets its first token in 2.3 s instead of ~40 s, with the long prompt's
+  own time unchanged (42 s solo, 40 s shared) and no memory cost. Two long prompts then share round-robin (67 / 70 s
+  instead of 40 / 80 s).
 - `pip install -e .` of this tree works as well; nothing native needs rebuilding.
 
 Load to `/health` takes 4-5 minutes (the first start after a reboot reads the PLE shards from disk, later starts hit
@@ -136,10 +141,11 @@ for every row: [docs/ampere-multigpu/benches/](docs/ampere-multigpu/benches/mach
 - **Per-user generation falls with the user count** (57 -> 44 -> 38 -> 29 tok/s at 1/3/5/7 users at 250k). Pipeline
   parallelism micro-batches decode across stages; the sum keeps rising (58 -> 206) but the per-user rate does not stay
   flat the way llama.cpp-multigpu's grouped decode does (34 -> 30). At five users both engines sum to ~150-190.
-- **Prefill is first-come-first-served.** Seven 230k prompts sent at once are prefilled one after another (the last one
-  waits 225 s for its first token; the GPUs are busy the whole time, so interleaving would not shorten the total). A
-  short prompt behind a long one waits for the long one; `--long-prefill-token-threshold` is the knob, but the larger
-  token budgets it needs do not fit 24 GB cards (see §3). Under test.
+- **Prefill is first-come-first-served unless capped.** Seven 230k prompts sent at once are prefilled one after another
+  (the last one waits 225 s for its first token; the GPUs are busy the whole time, so interleaving would not shorten
+  the total). With `--long-prefill-token-threshold 1024` (§3) a short prompt no longer waits behind a long one, and two
+  long ones share the budget instead of queueing; nothing makes seven simultaneous 230k prompts finish sooner than the
+  aggregate prefill rate allows.
 - **Batched requests are not byte-identical to their solo runs** (vLLM batch-composition nondeterminism; outputs are
   coherent and the needle passes).
 - **Only this model family is touched.** Nothing here helps other models; for them use upstream.

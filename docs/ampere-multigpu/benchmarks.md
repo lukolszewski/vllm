@@ -115,7 +115,11 @@ claimed FP4 speed-ups do not apply without FP4 tensor cores. GPTQ-INT4 stays the
 - `--max-num-batched-tokens 16384` (to let a short prompt in beside a long prefill): the larger profile step costs ~1 GiB
   of activation memory per card and the GPU KV cache fell to 969,650 tokens (3.7 x 262k). `8192` kept the KV (1,840,645)
   but the QSA indexer's prefill selection ran out of memory on the first 230k prompt (`qsa_select_paged_prefill`,
-  512 MiB allocation with 433 MiB free). Keep the default 2048 on 24 GB cards.
+  512 MiB allocation with 433 MiB free). Keep the default 2048 on 24 GB cards. What does work, with no memory cost, is
+  `--long-prefill-token-threshold 1024` (a waiting request gets half of every step): measured with int8 KV and 7 seats,
+  a 3k prompt sent 10 s behind a 230k prefill got its first token in 2.33 s (the long prompt: 40.3 s, solo 42.0 s;
+  short solo 1.1 s); two 230k prompts 10 s apart finished their prefills in 67 and 70 s instead of 40 and ~80 s. Raw
+  data: `2026-10-12-int8kv-prefill-fairness.json`.
 - fp8 KV on Ampere via the unfused `reshape_and_cache` path: not implemented; the fused prepare kernel is the default
   and is the only store path for int8 as well.
 
