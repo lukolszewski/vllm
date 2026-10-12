@@ -1,0 +1,42 @@
+{
+ "label": "w7-nvfp4",
+ "url": "http://localhost:8010",
+ "sessions": 3,
+ "prompt_tokens": 250000,
+ "gen": 128,
+ "rows": [
+  {
+   "session": 0,
+   "ttft1": 3.013,
+   "wall1": 3.066,
+   "ttft2": 2.155,
+   "tokens": 128,
+   "wall2": 5.476,
+   "tg_slot": 38.54
+  },
+  {
+   "session": 1,
+   "ttft1": 2.252,
+   "wall1": 2.324,
+   "ttft2": 1.32,
+   "tokens": 128,
+   "wall2": 5.089,
+   "tg_slot": 33.96
+  },
+  {
+   "session": 2,
+   "ttft1": 1.318,
+   "wall1": 1.318,
+   "ttft2": 2.91,
+   "tokens": 128,
+   "wall2": 5.735,
+   "tg_slot": 45.31
+  }
+ ],
+ "tg_slot_mean": 39.27,
+ "tg_total": 66.88,
+ "gpu_before": "0, 22030 MiB, 0 %;1, 22640 MiB, 96 %;2, 22548 MiB, 32 %;3, 22532 MiB, 71 %;4, 22532 MiB, 0 %;5, 22560 MiB, 56 %;6, 208 MiB, 61 %",
+ "gpu_after": "0, 22030 MiB, 100 %;1, 22640 MiB, 99 %;2, 22548 MiB, 87 %;3, 22532 MiB, 81 %;4, 22532 MiB, 98 %;5, 22560 MiB, 82 %;6, 208 MiB, 54 %",
+ "started": "2026-10-12T09:23:49",
+ "finished": "2026-10-12T09:23:58"
+}

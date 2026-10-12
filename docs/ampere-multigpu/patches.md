@@ -1,6 +1,9 @@
-# pp-nvidia-qwen: pipeline-parallel Qwen3.8-Flash-Next (Qwen4Exp) on NVIDIA GPUs
+# What the ampere-multigpu branch changes (patch notes)
 
-This branch is upstream vLLM at commit `7d0b4e57a` (nightly 0.31.1rc1.dev253, 2026-10-09)
+This file is the engineering log of the branch (originally `PP-NVIDIA-QWEN.md` on `pp-nvidia-qwen`). The user-facing summary is the repository [README](../../README.md); the measurements are in [benchmarks.md](benchmarks.md).
+
+
+The branch is upstream vLLM at commit `7d0b4e57a` (nightly 0.31.1rc1.dev253, 2026-10-09)
 plus commits that make Qwen4Exp models (Qwen3.8-Flash-Next) run with
 `--pipeline-parallel-size > 1`, load GPTQ checkpoints that quantize only the
 Linear layers, use `--kv-cache-dtype fp8` on Ampere GPUs, and serve the PLE

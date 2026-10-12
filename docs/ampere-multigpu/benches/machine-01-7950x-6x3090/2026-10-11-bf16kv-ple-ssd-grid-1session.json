@@ -1,0 +1,64 @@
+{
+ "client": "readme_grid_openai.py",
+ "label": "w2-bf16",
+ "url": "http://localhost:8010",
+ "gen_tokens": 128,
+ "rows": [
+  {
+   "slots": 1,
+   "size_tokens": 50000,
+   "gpu_before": "34, 28.85;34, 28.62;52, 34.28;44, 37.66;47, 26.93;49, 23.78;50, 27.73",
+   "t_start": "17:25:46",
+   "pp_agg": 7830.9,
+   "pp_slot_min": 7830.9,
+   "pp_slot_mean": 7830.9,
+   "pp_slot_max": 7830.9,
+   "prompt_n": [
+    49681
+   ],
+   "ttft_min": 6.3,
+   "ttft_max": 6.3,
+   "pp_wall": 6.3,
+   "tg_agg": 55.12,
+   "tg_slot_min": 54.69,
+   "tg_slot_max": 54.69,
+   "tg_slot_mean": 54.69,
+   "prompt_n_round2": [
+    49681
+   ],
+   "tg_wall": 2.3,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that"
+   ],
+   "gpu_after": "40, 176.98;39, 182.38;58, 188.44;52, 188.85;57, 179.74;58, 202.23;51, 27.84"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 250000,
+   "gpu_before": "40, 176.98;39, 180.28;58, 188.08;51, 188.85;57, 172.80;58, 202.23;51, 27.96",
+   "t_start": "17:25:55",
+   "pp_agg": 7550.3,
+   "pp_slot_min": 7550.3,
+   "pp_slot_mean": 7550.3,
+   "pp_slot_max": 7550.3,
+   "prompt_n": [
+    248281
+   ],
+   "ttft_min": 32.9,
+   "ttft_max": 32.9,
+   "pp_wall": 32.9,
+   "tg_agg": 56.66,
+   "tg_slot_min": 56.21,
+   "tg_slot_max": 56.21,
+   "tg_slot_mean": 56.21,
+   "prompt_n_round2": [
+    248281
+   ],
+   "tg_wall": 2.3,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that"
+   ],
+   "gpu_after": "40, 176.98;39, 182.18;61, 193.34;55, 193.95;60, 184.96;60, 205.64;54, 28.67"
+  }
+ ]
+}

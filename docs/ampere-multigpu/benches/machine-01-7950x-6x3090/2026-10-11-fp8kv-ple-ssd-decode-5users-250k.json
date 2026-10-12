@@ -1,0 +1,60 @@
+{
+ "label": "w2-fp8",
+ "url": "http://localhost:8010",
+ "sessions": 5,
+ "prompt_tokens": 250000,
+ "gen": 128,
+ "rows": [
+  {
+   "session": 0,
+   "ttft1": 425.861,
+   "wall1": 425.927,
+   "ttft2": 4.293,
+   "tokens": 128,
+   "wall2": 8.116,
+   "tg_slot": 33.48
+  },
+  {
+   "session": 1,
+   "ttft1": 107.358,
+   "wall1": 135.189,
+   "ttft2": 2.896,
+   "tokens": 128,
+   "wall2": 8.064,
+   "tg_slot": 24.77
+  },
+  {
+   "session": 2,
+   "ttft1": 268.836,
+   "wall1": 268.836,
+   "ttft2": 3.603,
+   "tokens": 128,
+   "wall2": 8.093,
+   "tg_slot": 28.51
+  },
+  {
+   "session": 3,
+   "ttft1": 348.825,
+   "wall1": 375.777,
+   "ttft2": 1.532,
+   "tokens": 128,
+   "wall2": 8.032,
+   "tg_slot": 19.69
+  },
+  {
+   "session": 4,
+   "ttft1": 186.706,
+   "wall1": 216.668,
+   "ttft2": 2.194,
+   "tokens": 128,
+   "wall2": 8.035,
+   "tg_slot": 21.91
+  }
+ ],
+ "tg_slot_mean": 25.67,
+ "tg_total": 78.63,
+ "gpu_before": "0, 22418 MiB, 0 %;1, 22488 MiB, 94 %;2, 22396 MiB, 87 %;3, 22908 MiB, 81 %;4, 22908 MiB, 70 %;5, 22400 MiB, 33 %;6, 208 MiB, 53 %",
+ "gpu_after": "0, 22418 MiB, 100 %;1, 23000 MiB, 100 %;2, 22908 MiB, 99 %;3, 22908 MiB, 96 %;4, 22908 MiB, 100 %;5, 22402 MiB, 85 %;6, 208 MiB, 64 %",
+ "started": "2026-10-11T17:14:09",
+ "finished": "2026-10-11T17:21:23"
+}

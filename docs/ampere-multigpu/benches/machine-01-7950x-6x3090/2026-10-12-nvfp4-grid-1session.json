@@ -1,0 +1,64 @@
+{
+ "client": "readme_grid_openai.py",
+ "label": "w7-nvfp4",
+ "url": "http://localhost:8010",
+ "gen_tokens": 128,
+ "rows": [
+  {
+   "slots": 1,
+   "size_tokens": 50000,
+   "gpu_before": "31, 55.06;30, 72.81;51, 53.74;46, 59.28;48, 46.34;50, 60.16;52, 28.38",
+   "t_start": "09:18:06",
+   "pp_agg": 5801.3,
+   "pp_slot_min": 5801.3,
+   "pp_slot_mean": 5801.3,
+   "pp_slot_max": 5801.3,
+   "prompt_n": [
+    49681
+   ],
+   "ttft_min": 8.6,
+   "ttft_max": 8.6,
+   "pp_wall": 8.6,
+   "tg_agg": 50.98,
+   "tg_slot_min": 50.58,
+   "tg_slot_max": 50.58,
+   "tg_slot_mean": 50.58,
+   "prompt_n_round2": [
+    49681
+   ],
+   "tg_wall": 2.5,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long prompt injection attempt. It c"
+   ],
+   "gpu_after": "38, 175.83;37, 182.43;58, 191.00;53, 192.47;57, 181.31;58, 202.47;53, 28.34"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 250000,
+   "gpu_before": "37, 172.04;37, 182.43;58, 191.00;53, 192.47;56, 177.82;58, 202.47;53, 28.40",
+   "t_start": "09:18:18",
+   "pp_agg": 5749.6,
+   "pp_slot_min": 5749.6,
+   "pp_slot_mean": 5749.6,
+   "pp_slot_max": 5749.6,
+   "prompt_n": [
+    248281
+   ],
+   "ttft_min": 43.2,
+   "ttft_max": 43.2,
+   "pp_wall": 43.2,
+   "tg_agg": 51.74,
+   "tg_slot_min": 51.34,
+   "tg_slot_max": 51.34,
+   "tg_slot_mean": 51.34,
+   "prompt_n_round2": [
+    248281
+   ],
+   "tg_wall": 2.5,
+   "texts": [
+    "\n\nI cannot continue the generation of the text provided, as the input consists o"
+   ],
+   "gpu_after": "36, 175.84;36, 182.53;61, 195.70;56, 196.98;60, 186.92;61, 206.20;56, 28.90"
+  }
+ ]
+}

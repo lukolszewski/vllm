@@ -1,0 +1,78 @@
+{
+ "label": "w4-int8",
+ "url": "http://localhost:8010",
+ "sessions": 7,
+ "prompt_tokens": 250000,
+ "gen": 128,
+ "rows": [
+  {
+   "session": 0,
+   "ttft1": 3.321,
+   "wall1": 14.202,
+   "ttft2": 2.279,
+   "tokens": 128,
+   "wall2": 7.286,
+   "tg_slot": 25.56
+  },
+  {
+   "session": 1,
+   "ttft1": 102.042,
+   "wall1": 102.042,
+   "ttft2": 3.574,
+   "tokens": 128,
+   "wall2": 7.728,
+   "tg_slot": 30.82
+  },
+  {
+   "session": 2,
+   "ttft1": 162.448,
+   "wall1": 172.248,
+   "ttft2": 1.075,
+   "tokens": 128,
+   "wall2": 6.76,
+   "tg_slot": 22.51
+  },
+  {
+   "session": 3,
+   "ttft1": 72.01,
+   "wall1": 72.01,
+   "ttft2": 1.698,
+   "tokens": 128,
+   "wall2": 7.028,
+   "tg_slot": 24.02
+  },
+  {
+   "session": 4,
+   "ttft1": 190.64,
+   "wall1": 190.707,
+   "ttft2": 3.029,
+   "tokens": 128,
+   "wall2": 7.535,
+   "tg_slot": 28.41
+  },
+  {
+   "session": 5,
+   "ttft1": 132.641,
+   "wall1": 132.641,
+   "ttft2": 4.199,
+   "tokens": 128,
+   "wall2": 7.892,
+   "tg_slot": 34.67
+  },
+  {
+   "session": 6,
+   "ttft1": 41.896,
+   "wall1": 41.896,
+   "ttft2": 4.77,
+   "tokens": 128,
+   "wall2": 7.995,
+   "tg_slot": 39.69
+  }
+ ],
+ "tg_slot_mean": 29.38,
+ "tg_total": 111.71,
+ "gpu_before": "0, 22042 MiB, 0 %;1, 22112 MiB, 95 %;2, 22020 MiB, 0 %;3, 22532 MiB, 75 %;4, 22532 MiB, 67 %;5, 22024 MiB, 59 %;6, 208 MiB, 22 %",
+ "gpu_after": "0, 22042 MiB, 98 %;1, 22624 MiB, 96 %;2, 22532 MiB, 90 %;3, 22532 MiB, 84 %;4, 22532 MiB, 74 %;5, 22026 MiB, 69 %;6, 208 MiB, 1 %",
+ "started": "2026-10-12T00:50:46",
+ "finished": "2026-10-12T00:54:05"
+}

@@ -1,0 +1,98 @@
+{
+ "url": "http://localhost:8009",
+ "prompt_tokens": 230000,
+ "seats": 7,
+ "rows": [
+  {
+   "tag": "cold-concurrent",
+   "prompt": 0,
+   "ttft": 41.9,
+   "wall": 53.78,
+   "chunks": 8
+  },
+  {
+   "tag": "cold-concurrent",
+   "prompt": 1,
+   "ttft": 69.85,
+   "wall": 81.82,
+   "chunks": 8
+  },
+  {
+   "tag": "cold-concurrent",
+   "prompt": 2,
+   "ttft": 100.81,
+   "wall": 112.62,
+   "chunks": 8
+  },
+  {
+   "tag": "cold-concurrent",
+   "prompt": 3,
+   "ttft": 128.79,
+   "wall": 141.0,
+   "chunks": 8
+  },
+  {
+   "tag": "cold-concurrent",
+   "prompt": 4,
+   "ttft": 160.87,
+   "wall": 174.22,
+   "chunks": 8
+  },
+  {
+   "tag": "cold-concurrent",
+   "prompt": 5,
+   "ttft": 195.96,
+   "wall": 208.37,
+   "chunks": 8
+  },
+  {
+   "tag": "cold-concurrent",
+   "prompt": 6,
+   "ttft": 225.45,
+   "wall": 225.51,
+   "chunks": 5
+  },
+  {
+   "tag": "cold-evictor-1",
+   "prompt": 7,
+   "ttft": 35.86,
+   "wall": 35.93,
+   "chunks": 6
+  },
+  {
+   "tag": "cold-evictor-2",
+   "prompt": 8,
+   "ttft": 38.46,
+   "wall": 38.53,
+   "chunks": 6
+  },
+  {
+   "tag": "return-prompt0-expected-evicted",
+   "prompt": 0,
+   "ttft": 3.15,
+   "wall": 3.21,
+   "chunks": 5
+  },
+  {
+   "tag": "return-evictor2-on-gpu",
+   "prompt": 8,
+   "ttft": 1.89,
+   "wall": 1.95,
+   "chunks": 6
+  },
+  {
+   "tag": "return-prompt1-expected-evicted",
+   "prompt": 1,
+   "ttft": 2.79,
+   "wall": 2.86,
+   "chunks": 6
+  },
+  {
+   "tag": "cold-reference",
+   "prompt": 9,
+   "ttft": 42.76,
+   "wall": 42.83,
+   "chunks": 6
+  }
+ ]
+}

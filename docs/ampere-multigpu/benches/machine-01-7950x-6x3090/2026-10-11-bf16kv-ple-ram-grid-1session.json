@@ -1,0 +1,348 @@
+{
+ "client": "readme_grid_openai.py",
+ "label": "vllm-pp6",
+ "url": "http://localhost:8010",
+ "gen_tokens": 128,
+ "rows": [
+  {
+   "slots": 1,
+   "size_tokens": 5000,
+   "gpu_before": "31, 28.39;31, 28.68;47, 33.73;41, 36.67;44, 26.87;52, 24.58;47, 26.57",
+   "t_start": "03:11:29",
+   "pp_agg": 4027.9,
+   "pp_slot_min": 4027.9,
+   "pp_slot_mean": 4027.9,
+   "pp_slot_max": 4027.9,
+   "prompt_n": [
+    4995
+   ],
+   "ttft_min": 1.2,
+   "ttft_max": 1.2,
+   "pp_wall": 1.2,
+   "tg_agg": 56.3,
+   "tg_slot_min": 55.86,
+   "tg_slot_max": 55.86,
+   "tg_slot_mean": 55.86,
+   "prompt_n_round2": [
+    4995
+   ],
+   "tg_wall": 2.3,
+   "texts": [
+    "\n\n<think>\nThe user's message is a massive block of repeated technical terms rela"
+   ],
+   "gpu_after": "39, 176.13;39, 183.22;54, 187.59;49, 190.75;52, 181.07;62, 213.66;47, 26.14"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 50000,
+   "gpu_before": "39, 176.13;39, 183.22;54, 187.59;49, 190.75;52, 181.07;62, 213.66;46, 26.17",
+   "t_start": "03:11:32",
+   "pp_agg": 8365.3,
+   "pp_slot_min": 8365.3,
+   "pp_slot_mean": 8365.3,
+   "pp_slot_max": 8365.3,
+   "prompt_n": [
+    49681
+   ],
+   "ttft_min": 5.9,
+   "ttft_max": 5.9,
+   "pp_wall": 5.9,
+   "tg_agg": 58.09,
+   "tg_slot_min": 57.64,
+   "tg_slot_max": 57.64,
+   "tg_slot_mean": 57.64,
+   "prompt_n_round2": [
+    49681
+   ],
+   "tg_wall": 2.2,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that"
+   ],
+   "gpu_after": "43, 178.06;40, 183.68;55, 188.69;52, 194.49;54, 183.16;63, 215.15;46, 25.34"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 150000,
+   "gpu_before": "43, 178.06;40, 183.68;55, 188.69;52, 194.49;54, 183.16;63, 215.15;46, 25.43",
+   "t_start": "03:11:41",
+   "pp_agg": 9220.2,
+   "pp_slot_min": 9220.2,
+   "pp_slot_mean": 9220.2,
+   "pp_slot_max": 9220.2,
+   "prompt_n": [
+    148981
+   ],
+   "ttft_min": 16.2,
+   "ttft_max": 16.2,
+   "pp_wall": 16.2,
+   "tg_agg": 59.24,
+   "tg_slot_min": 58.77,
+   "tg_slot_max": 58.77,
+   "tg_slot_mean": 58.77,
+   "prompt_n_round2": [
+    148981
+   ],
+   "tg_wall": 2.2,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long block of repeated technical te"
+   ],
+   "gpu_after": "40, 176.87;38, 183.46;58, 190.97;54, 196.14;57, 186.80;63, 214.85;45, 25.66"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 200000,
+   "gpu_before": "40, 176.87;38, 183.46;58, 190.97;54, 196.14;57, 186.80;63, 214.85;45, 25.70",
+   "t_start": "03:11:59",
+   "pp_agg": 9235.0,
+   "pp_slot_min": 9235.0,
+   "pp_slot_mean": 9235.0,
+   "pp_slot_max": 9235.0,
+   "prompt_n": [
+    198631
+   ],
+   "ttft_min": 21.5,
+   "ttft_max": 21.5,
+   "pp_wall": 21.5,
+   "tg_agg": 59.51,
+   "tg_slot_min": 59.04,
+   "tg_slot_max": 59.04,
+   "tg_slot_mean": 59.04,
+   "prompt_n_round2": [
+    198631
+   ],
+   "tg_wall": 2.2,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long block of repeated technical te"
+   ],
+   "gpu_after": "36, 176.02;36, 182.62;60, 194.72;55, 197.25;59, 189.01;62, 214.61;44, 25.44"
+  },
+  {
+   "slots": 1,
+   "size_tokens": 250000,
+   "gpu_before": "36, 176.02;35, 182.04;60, 194.72;55, 197.25;59, 189.01;61, 214.68;44, 25.42",
+   "t_start": "03:12:23",
+   "pp_agg": 9046.1,
+   "pp_slot_min": 9046.1,
+   "pp_slot_mean": 9046.1,
+   "pp_slot_max": 9046.1,
+   "prompt_n": [
+    248281
+   ],
+   "ttft_min": 27.4,
+   "ttft_max": 27.4,
+   "pp_wall": 27.4,
+   "tg_agg": 58.26,
+   "tg_slot_min": 57.8,
+   "tg_slot_max": 57.8,
+   "tg_slot_mean": 57.8,
+   "prompt_n_round2": [
+    248281
+   ],
+   "tg_wall": 2.2,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that"
+   ],
+   "gpu_after": "37, 177.04;37, 182.47;62, 196.15;56, 200.09;61, 192.57;61, 214.13;44, 25.59"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 5000,
+   "gpu_before": "37, 172.23;36, 176.30;61, 192.71;55, 193.61;60, 190.32;61, 214.13;44, 25.69",
+   "t_start": "03:12:53",
+   "pp_agg": 6208.5,
+   "pp_slot_min": 1242.0,
+   "pp_slot_mean": 2191.9,
+   "pp_slot_max": 4387.7,
+   "prompt_n": [
+    4995,
+    4995,
+    4995,
+    4995,
+    4995
+   ],
+   "ttft_min": 1.1,
+   "ttft_max": 4.0,
+   "pp_wall": 4.0,
+   "tg_agg": 107.86,
+   "tg_slot_min": 21.58,
+   "tg_slot_max": 41.65,
+   "tg_slot_mean": 31.21,
+   "prompt_n_round2": [
+    4995,
+    4995,
+    4995,
+    4995,
+    4995
+   ],
+   "tg_wall": 5.9,
+   "texts": [
+    "\n\n<think>\nThe user's message is a prompt injection/jailbreak attempt. It contain",
+    "\n\n<think>\nThe user's message is a massive block of repeated technical terms rela",
+    "\n\n<think>\nThe user's message is an extremely long block of repeated technical te",
+    "\n\n<think>\nThe user's message appears to be a prompt injection/jailbreak attempt ",
+    "\n\n<think>\nThe user's message is a prompt injection attempt. It contains a fake \""
+   ],
+   "gpu_after": "40, 232.34;39, 238.48;63, 252.18;58, 254.74;64, 247.46;64, 318.96;44, 25.46"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 50000,
+   "gpu_before": "40, 232.34;39, 238.48;63, 252.18;58, 254.74;64, 247.46;64, 318.96;44, 25.43",
+   "t_start": "03:13:00",
+   "pp_agg": 8452.1,
+   "pp_slot_min": 1690.6,
+   "pp_slot_mean": 3871.9,
+   "pp_slot_max": 8338.0,
+   "prompt_n": [
+    49681,
+    49681,
+    49681,
+    49681,
+    49680
+   ],
+   "ttft_min": 6.0,
+   "ttft_max": 29.4,
+   "pp_wall": 29.4,
+   "tg_agg": 24.22,
+   "tg_slot_min": 4.87,
+   "tg_slot_max": 42.43,
+   "tg_slot_mean": 15.17,
+   "prompt_n_round2": [
+    49681,
+    49681,
+    49681,
+    49681,
+    49680
+   ],
+   "tg_wall": 26.4,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that",
+    "\n\n<think>\nThe user has sent an extremely long prompt that consists of a header \"",
+    "\n\n<think>\nThe user has sent an extremely long prompt that consists of a header \"",
+    "\n\n<think>\nThe user has sent a very long prompt that appears to be a \"deep contex",
+    "\n\n<think>\nThe user's message is an extremely long prompt injection attempt. It c"
+   ],
+   "gpu_after": "39, 201.51;39, 207.56;63, 222.40;58, 224.20;63, 216.86;61, 245.79;47, 26.52"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 150000,
+   "gpu_before": "38, 189.99;39, 207.56;62, 212.07;56, 210.29;61, 204.16;61, 245.79;47, 26.65",
+   "t_start": "03:13:33",
+   "pp_agg": 8203.2,
+   "pp_slot_min": 1640.7,
+   "pp_slot_mean": 3751.7,
+   "pp_slot_max": 7966.3,
+   "prompt_n": [
+    148981,
+    148980,
+    148980,
+    148981,
+    148980
+   ],
+   "ttft_min": 18.7,
+   "ttft_max": 90.8,
+   "pp_wall": 90.8,
+   "tg_agg": 8.53,
+   "tg_slot_min": 1.72,
+   "tg_slot_max": 42.98,
+   "tg_slot_mean": 11.18,
+   "prompt_n_round2": [
+    148981,
+    148980,
+    148980,
+    148981,
+    148980
+   ],
+   "tg_wall": 75.1,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long prompt injection attempt. It c",
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that",
+    "\n\n<think>\nThe user has sent an extremely long prompt that consists of a header \"",
+    "\n\n<think>\nThe user's message is an extremely long prompt injection attempt. It c",
+    "\nassistant\n<think>\nThe user has sent an extremely long prompt that appears to be"
+   ],
+   "gpu_after": "41, 217.68;40, 218.27;65, 236.94;60, 240.36;64, 233.88;62, 276.20;55, 28.28"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 200000,
+   "gpu_before": "40, 192.49;39, 188.35;63, 208.90;58, 213.96;63, 207.05;62, 276.20;55, 28.31",
+   "t_start": "03:15:07",
+   "pp_agg": 8533.4,
+   "pp_slot_min": 1706.9,
+   "pp_slot_mean": 3882.5,
+   "pp_slot_max": 8258.8,
+   "prompt_n": [
+    198631,
+    198630,
+    198630,
+    198631,
+    198630
+   ],
+   "ttft_min": 24.1,
+   "ttft_max": 116.4,
+   "pp_wall": 116.4,
+   "tg_agg": 6.71,
+   "tg_slot_min": 1.35,
+   "tg_slot_max": 41.12,
+   "tg_slot_mean": 10.27,
+   "prompt_n_round2": [
+    198631,
+    198630,
+    198630,
+    198631,
+    198630
+   ],
+   "tg_wall": 95.4,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that",
+    "\n\n<think>\nThe user has sent an extremely long prompt that consists of a header \"",
+    "\n\n<think>\nThe user's message is an extremely long block of repeated technical te",
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that",
+    "\nassistant\n<think>\nThe user has sent an extremely long prompt that appears to be"
+   ],
+   "gpu_after": "42, 212.45;42, 217.21;66, 231.73;60, 235.04;64, 226.17;63, 271.38;48, 26.28"
+  },
+  {
+   "slots": 5,
+   "size_tokens": 250000,
+   "gpu_before": "42, 212.45;42, 217.21;66, 231.73;60, 235.04;64, 226.17;63, 271.38;49, 26.43",
+   "t_start": "03:17:07",
+   "pp_agg": 8110.9,
+   "pp_slot_min": 1622.3,
+   "pp_slot_mean": 3898.6,
+   "pp_slot_max": 8723.5,
+   "prompt_n": [
+    248281,
+    248280,
+    248280,
+    248280,
+    248279
+   ],
+   "ttft_min": 28.5,
+   "ttft_max": 153.0,
+   "pp_wall": 153.1,
+   "tg_agg": 5.04,
+   "tg_slot_min": 1.37,
+   "tg_slot_max": 54.59,
+   "tg_slot_mean": 12.58,
+   "prompt_n_round2": [
+    248281,
+    248280,
+    248280,
+    248280,
+    248279
+   ],
+   "tg_wall": 126.9,
+   "texts": [
+    "\n\n<think>\nThe user's message is an extremely long prompt injection attempt. It c",
+    "\nassistant\n<think>\nThe user has sent an extremely long prompt that appears to be",
+    "\n\n<think>\nThe user has sent an extremely long prompt that appears to be a \"deep ",
+    "\n\n<think>\nThe user's message is an extremely long, repetitive block of text that",
+    "\nassistant\n<think>\nThe user has sent an extremely long prompt that appears to be"
+   ],
+   "gpu_after": "43, 178.85;42, 184.73;65, 200.36;59, 201.98;64, 192.44;61, 212.63;46, 26.48"
+  }
+ ]
+}

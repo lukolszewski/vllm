@@ -1,0 +1,42 @@
+{
+ "label": "w3-bf16",
+ "url": "http://localhost:8010",
+ "sessions": 3,
+ "prompt_tokens": 250000,
+ "gen": 128,
+ "rows": [
+  {
+   "session": 0,
+   "ttft1": 85.621,
+   "wall1": 85.673,
+   "ttft2": 1.167,
+   "tokens": 128,
+   "wall2": 4.692,
+   "tg_slot": 36.31
+  },
+  {
+   "session": 1,
+   "ttft1": 57.454,
+   "wall1": 57.454,
+   "ttft2": 2.573,
+   "tokens": 128,
+   "wall2": 5.243,
+   "tg_slot": 47.94
+  },
+  {
+   "session": 2,
+   "ttft1": 29.23,
+   "wall1": 29.23,
+   "ttft2": 1.899,
+   "tokens": 128,
+   "wall2": 4.995,
+   "tg_slot": 41.35
+  }
+ ],
+ "tg_slot_mean": 41.87,
+ "tg_total": 73.1,
+ "gpu_before": "0, 22458 MiB, 100 %;1, 22260 MiB, 0 %;2, 22168 MiB, 0 %;3, 22168 MiB, 99 %;4, 22168 MiB, 99 %;5, 21658 MiB, 97 %;6, 208 MiB, 43 %",
+ "gpu_after": "0, 22458 MiB, 100 %;1, 22260 MiB, 100 %;2, 22168 MiB, 99 %;3, 22168 MiB, 99 %;4, 22168 MiB, 95 %;5, 21658 MiB, 95 %;6, 208 MiB, 64 %",
+ "started": "2026-10-11T18:25:50",
+ "finished": "2026-10-11T18:27:21"
+}
