@@ -7,6 +7,7 @@ from enum import Enum
 from functools import partial
 from typing import ClassVar
 
+import os
 import numpy as np
 import torch
 from flashinfer import (
@@ -1350,7 +1351,7 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                 # Tensor cores are enabled by default because the perf would be
                 # at least as good as cuda cores for all attention ops in latest
                 # gpus.
-                use_tensor_cores=True,
+                use_tensor_cores=os.environ.get("VLLM_FI_DECODE_TENSOR_CORES", "1") == "1",
                 backend=backend,
             )
 
