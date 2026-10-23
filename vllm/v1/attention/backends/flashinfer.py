@@ -118,6 +118,59 @@ if _TURING_ATTN:
 
     _turing_attn_run = _turing_attn_mod.run
 
+# int8_per_token_head KV on the turing path (needs VLLM_TURING_ATTN=1).
+# Page layout per block (N tokens x H kv heads, D = head_size), inside vLLM's
+# 520 B/token-head budget: data rows (n*H + h) * 2D = K[D] int8 then V[D] int8
+# (16-byte aligned rows), then the scale region at N*H*2D: (n*H + h) * 8 =
+# k_scale f32, v_scale f32. Decode/verify read it with turing_attn; prefill
+# dequantises the prefill sub-batch's pages into a shared fp16 scratch
+# (compact page ids) and runs FlashInfer fp16-KV prefill on it.
+_INT8_KV = "int8_per_token_head"
+_INT8_SCRATCH_PAD_TOKENS = 4096
+_int8_scratch: dict[int, torch.Tensor] = {}
+_turing_kv_int8 = None
+
+
+def _int8_kv_mod():
+    global _turing_kv_int8
+    if _turing_kv_int8 is None:
+        import turing_kv_int8
+
+        _turing_kv_int8 = turing_kv_int8
+    return _turing_kv_int8
+
+
+def _int8_scratch_tokens(max_model_len: int) -> int:
+    # One request needs at most cdiv(len, N) pages <= (max_model_len + N - 1)
+    # tokens; groups of requests are formed so they fit the same budget.
+    return max_model_len + _INT8_SCRATCH_PAD_TOKENS
+
+
+def _int8_kv_views(
+    kv_cache: torch.Tensor, head_size: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """(kv_int8 [B, 2, N, H, D], kv_scales [B, N, H, 2] f32) over the raw
+    per-layer cache, whose logical view is [B, H, N, 2*D + 8] int8."""
+    B, H, N, C = kv_cache.shape
+    D = head_size
+    assert kv_cache.dtype == torch.int8 and C == 2 * D + 8, (kv_cache.shape, D)
+    sb, sh, sn, sc = kv_cache.stride()
+    # The block region must be contiguous (NHD or HND physical order).
+    assert sc == 1 and (sh, sn) in ((C, H * C), (N * C, C)), kv_cache.stride()
+    base = kv_cache.storage_offset()
+    assert sb % 16 == 0 and base % 16 == 0, (sb, base)
+    storage = kv_cache.untyped_storage()
+    raw_i8 = torch.empty(0, dtype=torch.int8, device=kv_cache.device).set_(storage)
+    raw_f32 = torch.empty(0, dtype=torch.float32, device=kv_cache.device).set_(
+        storage
+    )
+    kv = torch.as_strided(raw_i8, (B, 2, N, H, D), (sb, D, H * 2 * D, 2 * D, 1), base)
+    scales = torch.as_strided(
+        raw_f32, (B, N, H, 2), (sb // 4, 2 * H, 2, 1), (base + N * H * 2 * D) // 4
+    )
+    return kv, scales
+
+
 trtllm_workspace_buffer = None
 
 
@@ -448,6 +501,17 @@ class FlashInferBackend(AttentionBackend):
     def customize_spec(cls, spec: "AttentionSpec") -> "AttentionSpec":
         """NVFP4 stores K and V as separate per-head slots of packed fp4 data
         plus fp8 block scales."""
+        if (
+            spec.state_content_bytes is None
+            and spec.kv_quant_mode == KVQuantMode.INT8_PER_TOKEN_HEAD
+        ):
+            # int8 K + V data and one fp32 scale each per token-head (the same
+            # budget as vLLM's Triton layout; the order inside the block is
+            # ours, see _int8_kv_views).
+            return replace(
+                spec,
+                state_content_bytes=spec.head_size + spec.head_size_v + 8,
+            )
         if spec.state_content_bytes is not None or not spec.kv_quant_mode.is_nvfp4:
             return spec
         hs_k = nvfp4_kv_cache_full_dim(spec.head_size)
@@ -469,6 +533,7 @@ class FlashInferBackend(AttentionBackend):
         "fp8_e5m2",
         "nvfp4",
         "nvfp4_4over6",
+        "int8_per_token_head",
     ]
 
     @staticmethod
@@ -537,6 +602,8 @@ class FlashInferBackend(AttentionBackend):
             return torch.float8_e5m2
         elif kv_cache_dtype.startswith("nvfp4"):
             return torch.uint8
+        elif kv_cache_dtype == _INT8_KV:
+            return torch.int8
         else:
             raise ValueError(f"Unrecognized dtype: {kv_cache_dtype}")
 
@@ -633,6 +700,21 @@ class FIPrefill:
     """Metadata for the native FlashInfer prefill pathway (non-TRTLLM)."""
 
     wrapper: BatchPrefillWithPagedKVCacheWrapper | BatchDCPPrefillWrapper
+
+
+@dataclass
+class Int8PrefillGroup:
+    """One FlashInfer fp16 prefill over dequantised pages (int8 KV)."""
+
+    wrapper: BatchPrefillWithPagedKVCacheWrapper
+    q_start: int  # token offsets inside the prefill sub-batch
+    q_end: int
+    pages: torch.Tensor  # int32 device: block ids, in compact-id order
+
+
+@dataclass
+class Int8Prefill:
+    groups: list[Int8PrefillGroup]
 
 
 @dataclass
@@ -1033,8 +1115,30 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
             and not self.logits_soft_cap
             and self.q_data_type_prefill == torch.float16
             and self.q_data_type_decode == torch.float16
-            and self.kv_cache_dtype in (torch.float16, torch.float8_e4m3fn)
+            and self.kv_cache_dtype in (torch.float16, torch.float8_e4m3fn, torch.int8)
         )
+        self.kv_int8 = self.kv_cache_dtype == torch.int8
+        if self.kv_int8:
+            if not self.use_turing_attn:
+                raise ValueError(
+                    "--kv-cache-dtype int8_per_token_head on FlashInfer needs "
+                    "VLLM_TURING_ATTN=1 and a turing-eligible layer "
+                    f"(dcp={self.use_dcp}, sinks={self.has_sinks}, "
+                    f"window={self.window_left}, softcap={self.logits_soft_cap})"
+                )
+            self._int8_scratch_pages = (
+                _int8_scratch_tokens(self.model_config.max_model_len) // self.page_size
+            )
+            self._int8_wrappers: list[BatchPrefillWithPagedKVCacheWrapper] = []
+            self._int8_arange = torch.arange(
+                self._int8_scratch_pages, dtype=torch.int32, device=self.device
+            )
+            logger.info_once(
+                "int8_per_token_head KV: turing_attn decode/verify, prefill via "
+                "fp16 dequant scratch of %d pages x %d tokens",
+                self._int8_scratch_pages,
+                self.page_size,
+            )
         if _TURING_ATTN:
             logger.info_once(
                 "VLLM_TURING_ATTN=1: turing_attn %s (max_q=%d, kv_dtype=%s)",
@@ -1065,6 +1169,8 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
         # this group is unquantized (e.g. --kv-cache-dtype-skip-layers), even
         # if cache_config requests a quantized dtype globally.
         cache_dtype = self.cache_dtype
+        if cache_dtype == _INT8_KV:
+            return self.model_config.dtype
 
         # On SM90/SM12x, XQA decode requires BF16/FP16-Q even with FP8 KV cache.
         # FI native prefill on SM90 still uses FP8-Q in that case; SM12x prefill
@@ -1297,6 +1403,79 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
         return _make_xqa_ragged_draft_block_mask(
             ragged_q_lens, q_len_per_req, causal, self.device
         )
+
+    def _plan_int8_prefill(
+        self,
+        prefill_start: int,
+        num_reqs: int,
+        qo_indptr_prefill_cpu: torch.Tensor,
+        paged_kv_indices: torch.Tensor,
+    ) -> Int8Prefill:
+        """int8 KV prefill: FlashInfer cannot read int8, so each group of
+        prefill requests gets its pages dequantised (per layer, in forward) into
+        the fp16 scratch with compact page ids 0..P-1; plan with fp16 KV."""
+        indptr = self.paged_kv_indptr.np[prefill_start : num_reqs + 1]
+        last = self.paged_kv_last_page_len.np[prefill_start:num_reqs]
+        qo = qo_indptr_prefill_cpu.numpy()
+        cap = self._int8_scratch_pages
+        groups: list[Int8PrefillGroup] = []
+        r0 = 0
+        n = num_reqs - prefill_start
+        while r0 < n:
+            r1 = r0 + 1
+            while r1 < n and indptr[r1 + 1] - indptr[r0] <= cap:
+                r1 += 1
+            p0, p1 = int(indptr[r0]), int(indptr[r1])
+            assert p1 - p0 <= cap, (
+                f"int8 prefill: a request needs {p1 - p0} pages > scratch {cap}"
+            )
+            gi = len(groups)
+            if gi == 0:
+                wrapper = self._get_prefill_wrapper(causal=True)
+            else:
+                while len(self._int8_wrappers) < gi:
+                    self._int8_wrappers.append(
+                        BatchPrefillWithPagedKVCacheWrapper(
+                            self._get_workspace_buffer(),
+                            get_flashinfer_layout_string(self.kv_cache_layout),
+                            backend="auto",
+                        )
+                    )
+                wrapper = self._int8_wrappers[gi - 1]
+            qo_g = torch.from_numpy(qo[r0 : r1 + 1] - qo[r0]).to(torch.int32)
+            kv_indptr_g = torch.from_numpy(indptr[r0 : r1 + 1] - p0).to(torch.int32)
+            last_g = torch.from_numpy(last[r0:r1].copy()).to(torch.int32)
+            kv_lens_g = get_seq_lens(kv_indptr_g, last_g, self.page_size)
+            wrapper.plan(
+                qo_indptr=qo_g,
+                paged_kv_indptr=kv_indptr_g,
+                paged_kv_indices=self._int8_arange,
+                paged_kv_last_page_len=last_g,
+                seq_lens=kv_lens_g,
+                num_qo_heads=self.num_qo_heads,
+                num_kv_heads=self.num_kv_heads,
+                head_dim_qk=self.head_dim,
+                page_size=self.page_size,
+                causal=True,
+                sm_scale=self.sm_scale,
+                window_left=self.window_left,
+                logits_soft_cap=self.logits_soft_cap,
+                q_data_type=self.q_data_type_prefill,
+                kv_data_type=self.model_config.dtype,
+                o_data_type=self.model_config.dtype,
+                fixed_split_size=self.prefill_fixed_split_size,
+                disable_split_kv=self.disable_split_kv,
+            )
+            groups.append(
+                Int8PrefillGroup(
+                    wrapper=wrapper,
+                    q_start=int(qo[r0]),
+                    q_end=int(qo[r1]),
+                    pages=paged_kv_indices[p0:p1],
+                )
+            )
+            r0 = r1
+        return Int8Prefill(groups=groups)
 
     def _get_prefill_wrapper(
         self,
@@ -1822,6 +2001,11 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                     max_q_len=max_q_len_prefill,
                     max_seq_len=max_seq_len,
                 )
+            elif self.kv_int8:
+                assert attn_metadata.causal and not self.use_dcp
+                attn_metadata.prefill = self._plan_int8_prefill(
+                    prefill_start, num_reqs, qo_indptr_prefill_cpu, paged_kv_indices
+                )
             else:
                 prefill_wrapper = self._get_prefill_wrapper(causal=attn_metadata.causal)
                 # Slicing CPU buffers that are only needed for FI native prefills
@@ -2079,6 +2263,27 @@ class FlashInferImpl(AttentionImpl):
         self.nvfp4_fa2 = self.is_kvcache_nvfp4 and _nvfp4_kv_on_fa2()
         self.nvfp4_trtllm = self.is_kvcache_nvfp4 and not self.nvfp4_fa2
         self.kv_cache_dtype = "nvfp4" if self.is_kvcache_nvfp4 else kv_cache_dtype
+        self.kv_int8 = kv_cache_dtype == _INT8_KV
+        self._int8_views: tuple | None = None
+        if self.kv_int8:
+            # Shared fp16 dequant scratch for prefill, allocated at model init so
+            # the memory profiler counts it (not taken from the KV pool later).
+            cfg = get_current_vllm_config_or_none()
+            assert cfg is not None and cfg.model_config is not None
+            dev = torch.cuda.current_device()
+            if dev not in _int8_scratch:
+                tokens = _int8_scratch_tokens(cfg.model_config.max_model_len)
+                _int8_scratch[dev] = torch.empty(
+                    tokens * num_kv_heads * 2 * head_size,
+                    dtype=cfg.model_config.dtype,
+                    device=f"cuda:{dev}",
+                )
+                logger.info_once(
+                    "int8 KV: prefill dequant scratch %.2f GiB (%d tokens)",
+                    _int8_scratch[dev].numel() * 2 / 2**30,
+                    tokens,
+                )
+            self._int8_scratch = _int8_scratch[dev]
         self.fp4_data_dim = head_size // 2 if self.is_kvcache_nvfp4 else 0
         self.logits_soft_cap = logits_soft_cap
         self.kv_sharing_target_layer_name = kv_sharing_target_layer_name
@@ -2394,7 +2599,11 @@ class FlashInferImpl(AttentionImpl):
             # Logical per-layer view is [B, H, N, 2*hs] (K | V in the content
             # dim) with layout-dependent strides -> zero-copy strided view
             # [B, 2, N, H, hs]; turing_attn must honour the strides.
-            turing_kv = kv_cache.unflatten(-1, (2, hs)).permute(0, 3, 2, 1, 4)
+            turing_kv_scales = None
+            if self.kv_int8:
+                turing_kv, turing_kv_scales = self._get_int8_views(kv_cache)
+            else:
+                turing_kv = kv_cache.unflatten(-1, (2, hs)).permute(0, 3, 2, 1, 4)
             turing_sm_scale = self.scale * layer._q_scale_float
 
         use_dcp = self.dcp_world_size > 1
@@ -2430,7 +2639,28 @@ class FlashInferImpl(AttentionImpl):
                     layer._v_scale_float,
                     out=output[num_decode_tokens:],
                     max_q_len=tm.max_q_len,
+                    kv_scales=turing_kv_scales,
                 )
+            elif isinstance(attn_metadata.prefill, Int8Prefill):
+                kv_i8, kv_sc = self._get_int8_views(kv_cache)
+                B_, _, N_, H_, D_ = kv_i8.shape
+                deq = _int8_kv_mod().dequant_gather
+                for g in attn_metadata.prefill.groups:
+                    npg = g.pages.shape[0]
+                    scratch = self._int8_scratch[: npg * 2 * N_ * H_ * D_].view(
+                        npg, 2, N_, H_, D_
+                    )
+                    deq(kv_i8, kv_sc, g.pages, scratch)
+                    g.wrapper.run(
+                        prefill_query[g.q_start : g.q_end],
+                        scratch,
+                        k_scale=layer._k_scale_float,
+                        v_scale=layer._v_scale_float,
+                        out=output[
+                            num_decode_tokens + g.q_start : num_decode_tokens
+                            + g.q_end
+                        ],
+                    )
             elif not prefill_use_trtllm:
                 assert isinstance(attn_metadata.prefill, FIPrefill)
                 prefill_wrapper = attn_metadata.prefill.wrapper
@@ -2659,6 +2889,7 @@ class FlashInferImpl(AttentionImpl):
                     layer._v_scale_float,
                     out=output[:num_decode_tokens],
                     max_q_len=1,
+                    kv_scales=turing_kv_scales,
                 )
             elif not decode_with_flashinfer_trtllm_api:
                 assert isinstance(attn_metadata.decode, FIDecode)
@@ -2880,6 +3111,13 @@ class FlashInferImpl(AttentionImpl):
                     output[:num_decode_tokens].copy_(out)
         return output_padded
 
+    def _get_int8_views(self, kv_cache: torch.Tensor):
+        v = self._int8_views
+        if v is None or v[0] != kv_cache.data_ptr() or v[1] != kv_cache.shape:
+            kv, sc = _int8_kv_views(kv_cache, self.head_size)
+            v = self._int8_views = (kv_cache.data_ptr(), kv_cache.shape, kv, sc)
+        return v[2], v[3]
+
     def do_kv_cache_update(
         self,
         layer: torch.nn.Module,
@@ -2888,6 +3126,11 @@ class FlashInferImpl(AttentionImpl):
         kv_cache: torch.Tensor,
         slot_mapping: torch.Tensor,
     ) -> None:
+        if self.kv_sharing_target_layer_name is None and self.kv_int8:
+            kv_i8, kv_sc = self._get_int8_views(kv_cache)
+            n = slot_mapping.shape[0]
+            _int8_kv_mod().write(key[:n], value[:n], kv_i8, kv_sc, slot_mapping)
+            return
         if self.kv_sharing_target_layer_name is None:
             # Reshape the input keys and values and store them in the cache.
             # Skip this if sharing KV cache with an earlier attention layer.
