@@ -2,6 +2,7 @@
 
 run(q, kv_cache, kv_indptr, kv_indices, kv_last_page_len, qo_indptr, sm_scale, k_scale, v_scale,
     out=None, max_q_len=None, nch=None, workspace=None)
+kv_scales: required iff kv_cache is int8 — fp32 [P, page, HK, 2] (per-token k_scale, v_scale; any strides).
 Same semantics as flashinfer BatchPrefillWithPagedKVCacheWrapper("NHD") planned causal=True.
 max_q_len: pass it (static in vLLM: 1 for decode, num_spec+1 for MTP) to avoid a host sync.
 nch: KV chunks per (request, kv head); default env TURING_ATTN_NCH or 136 // (B*HK).
@@ -41,7 +42,7 @@ def default_nch(batch: int, hk: int) -> int:
 
 
 def run(q, kv_cache, kv_indptr, kv_indices, kv_last_page_len, qo_indptr, sm_scale, k_scale=1.0, v_scale=1.0,
-        out=None, max_q_len=None, nch=None, workspace=None, min_tper=None):
+        out=None, max_q_len=None, nch=None, workspace=None, min_tper=None, kv_scales=None):
     m = _load()
     if min_tper is None:
         min_tper = int(os.environ.get("TURING_ATTN_MIN_TILES", "1"))
@@ -59,4 +60,4 @@ def run(q, kv_cache, kv_indptr, kv_indices, kv_last_page_len, qo_indptr, sm_scal
     if torch.is_tensor(v_scale):
         v_scale = float(v_scale)
     return m.run(q, kv_cache, kv_indptr, kv_indices, kv_last_page_len, qo_indptr, float(sm_scale), float(k_scale),
-                 float(v_scale), int(max_q_len), int(nch), out, workspace, int(min_tper))
+                 float(v_scale), int(max_q_len), int(nch), out, workspace, int(min_tper), kv_scales)

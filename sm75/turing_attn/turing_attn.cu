@@ -7,7 +7,11 @@
 //   * the 4 per-warp partial S tiles are summed through a small shared buffer, softmax is online (FA2 style),
 //   * the KV range is split into `nch` chunks per (request, kv head); a merge kernel combines them by LSE.
 // Semantics = flashinfer BatchPrefillWithPagedKVCacheWrapper(layout NHD), causal bottom-right aligned.
-// Layout: kv_cache [num_pages, 2, page, HK, 256] (any strides, last dim contiguous), fp16 or fp8 e4m3.
+// Layout: kv_cache [num_pages, 2, page, HK, 256] (any strides, last dim contiguous), fp16, fp8 e4m3, or int8 with
+// per-(token, kv head) fp32 scales kv_scales [num_pages, page, HK, 2] (k_scale, v_scale; any strides, last dim 1,
+// 8-byte aligned pairs). Measured: int8 data costs nothing extra over fp8 (exact magic-number conversion); the scale
+// reads cost 2-7 % of kernel time at depth (a head-major float4 variant and a one-load-per-lane + shuffle variant
+// were not faster, kbench/c1/ab3.py).
 #include <torch/extension.h>
 #include <c10/cuda/CUDAStream.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -37,26 +41,39 @@ __device__ __forceinline__ uint32_t f8pair(uint32_t x) {
   return *reinterpret_cast<uint32_t*>(&h);
 }
 
+// int8 -> fp16, exact: a byte b sits in the low byte of a half whose high byte is 0x64 after b ^= 0x80, i.e. the half
+// is 1024 + (b + 128); subtracting 1152 leaves b. x = 0x64HH64LL with HH/LL = (byte ^ 0x80).
+__device__ __forceinline__ uint32_t i8fix(uint32_t x) {
+  half2 h = *reinterpret_cast<half2*>(&x);
+  const half2 k1152 = __halves2half2(__ushort_as_half(0x6480), __ushort_as_half(0x6480));
+  h = __hsub2(h, k1152);
+  return *reinterpret_cast<uint32_t*>(&h);
+}
+
 __device__ __forceinline__ uint32_t pack_h2(float lo, float hi) {
   half2 h = __floats2half2_rn(lo, hi);
   return *reinterpret_cast<uint32_t*>(&h);
 }
 
-template <bool FP8> struct Raw;
-template <> struct Raw<true> { using K = uint4; using V = uint2; using E = uint8_t; };   // 16 dims / 8 dims of e4m3
-template <> struct Raw<false> { struct K2 { uint4 a, b; }; using K = K2; using V = uint4; using E = half; };
+// FMT: 0 = fp16, 1 = fp8 e4m3, 2 = int8 + per-token scales
+template <int FMT> struct Raw;
+template <> struct Raw<1> { using K = uint4; using V = uint2; using E = uint8_t; };   // 16 dims / 8 dims of e4m3
+template <> struct Raw<2> { using K = uint4; using V = uint2; using E = uint8_t; };   // 16 dims / 8 dims of int8
+template <> struct Raw<0> { struct K2 { uint4 a, b; }; using K = K2; using V = uint4; using E = half; };
 
-template <int MT, bool FP8>
+template <int MT, int FMT>
 __global__ void __launch_bounds__(128, 2)
 ta_partial(const half* __restrict__ q, const void* __restrict__ kv_raw,
            int64_t s_page, int64_t s_kv, int64_t s_tok, int64_t s_head,
            const int* __restrict__ kv_indptr, const int* __restrict__ kv_indices,
            const int* __restrict__ kv_last, const int* __restrict__ qo_indptr,
            float* __restrict__ o_part, float* __restrict__ lse_part,
-           int page, int HQ, int HK, float scale_log2, int nch, int min_tper) {
-  using E = typename Raw<FP8>::E;
-  using RK = typename Raw<FP8>::K;
-  using RV = typename Raw<FP8>::V;
+           int page, int HQ, int HK, float scale_log2, int nch, int min_tper,
+           const float* __restrict__ kv_sc, int64_t c_page, int64_t c_tok, int64_t c_head) {
+  constexpr bool FP8 = (FMT == 1), I8 = (FMT == 2), BYTE = (FMT != 0);
+  using E = typename Raw<FMT>::E;
+  using RK = typename Raw<FMT>::K;
+  using RV = typename Raw<FMT>::V;
   constexpr int ROWS = MT * 16;
   const E* kvp = reinterpret_cast<const E*>(kv_raw);
 
@@ -113,6 +130,7 @@ ta_partial(const half* __restrict__ q, const void* __restrict__ kv_raw,
 
   RK kr[4];
   RV vr[4][2];
+  float2 sc[4][2];
   auto load_k = [&](int tok0) {
 #pragma unroll
     for (int nt = 0; nt < 4; ++nt) {
@@ -120,10 +138,10 @@ ta_partial(const half* __restrict__ q, const void* __restrict__ kv_raw,
       if (tok < kvlen) {
         const int pg = __ldg(kv_indices + pbase + tok / page), off = tok % page;
         const E* kp = kvp + (int64_t)pg * s_page + (int64_t)off * s_tok + (int64_t)kvh * s_head + warp * 64 + tig * 16;
-        if constexpr (FP8) kr[nt] = __ldg(reinterpret_cast<const uint4*>(kp));
+        if constexpr (BYTE) kr[nt] = __ldg(reinterpret_cast<const uint4*>(kp));
         else { kr[nt].a = __ldg(reinterpret_cast<const uint4*>(kp)); kr[nt].b = __ldg(reinterpret_cast<const uint4*>(kp) + 1); }
       } else {
-        if constexpr (FP8) kr[nt] = make_uint4(0, 0, 0, 0);
+        if constexpr (BYTE) kr[nt] = make_uint4(0, 0, 0, 0);
         else { kr[nt].a = make_uint4(0, 0, 0, 0); kr[nt].b = kr[nt].a; }
       }
     }
@@ -138,8 +156,10 @@ ta_partial(const half* __restrict__ q, const void* __restrict__ kv_raw,
           const int pg = __ldg(kv_indices + pbase + tok / page), off = tok % page;
           const E* vp = kvp + (int64_t)pg * s_page + s_kv + (int64_t)off * s_tok + (int64_t)kvh * s_head + warp * 64 + gid * 8;
           vr[ks][e] = __ldg(reinterpret_cast<const RV*>(vp));
+          if constexpr (I8) sc[ks][e] = __ldg(reinterpret_cast<const float2*>(kv_sc + (int64_t)pg * c_page + (int64_t)off * c_tok + (int64_t)kvh * c_head));
         } else {
-          if constexpr (FP8) vr[ks][e] = make_uint2(0, 0);
+          if constexpr (I8) sc[ks][e] = make_float2(0.f, 0.f);
+          if constexpr (BYTE) vr[ks][e] = make_uint2(0, 0);
           else vr[ks][e] = make_uint4(0, 0, 0, 0);
         }
       }
@@ -165,6 +185,10 @@ ta_partial(const half* __restrict__ q, const void* __restrict__ kv_raw,
         const uint32_t w[4] = {kr[nt].x, kr[nt].y, kr[nt].z, kr[nt].w};
 #pragma unroll
         for (int kk = 0; kk < 8; ++kk) kb[kk] = f8pair(__byte_perm(w[kk >> 1], 0u, (kk & 1) ? 0x4342 : 0x4140));
+      } else if constexpr (I8) {
+        const uint32_t w[4] = {kr[nt].x ^ 0x80808080u, kr[nt].y ^ 0x80808080u, kr[nt].z ^ 0x80808080u, kr[nt].w ^ 0x80808080u};
+#pragma unroll
+        for (int kk = 0; kk < 8; ++kk) kb[kk] = i8fix(__byte_perm(w[kk >> 1], 0x64646464u, (kk & 1) ? 0x4342 : 0x4140));
       } else {
         kb[0] = kr[nt].a.x; kb[1] = kr[nt].a.y; kb[2] = kr[nt].a.z; kb[3] = kr[nt].a.w;
         kb[4] = kr[nt].b.x; kb[5] = kr[nt].b.y; kb[6] = kr[nt].b.z; kb[7] = kr[nt].b.w;
@@ -210,7 +234,7 @@ ta_partial(const half* __restrict__ q, const void* __restrict__ kv_raw,
 #pragma unroll
           for (int e = 0; e < 2; ++e) {
             const int tok = tok0 + nt * 8 + tig * 2 + e;
-            float v = s[mt][nt][h * 2 + e] * scale_log2;
+            float v = s[mt][nt][h * 2 + e] * (I8 ? scale_log2 * sc[nt][e].x : scale_log2);
             v = (tok <= lim) ? v : -INFINITY;
             s[mt][nt][h * 2 + e] = v;
             mx = fmaxf(mx, v);
@@ -252,6 +276,17 @@ ta_partial(const half* __restrict__ q, const void* __restrict__ kv_raw,
           const uint32_t b0 = i0 & 3, b1 = i1 & 3;
           a0 = f8pair(__byte_perm(A0, B0, b0 | (b0 << 4) | ((4 + b0) << 8) | ((4 + b0) << 12)));
           a1 = f8pair(__byte_perm(A0, B0, b1 | (b1 << 4) | ((4 + b1) << 8) | ((4 + b1) << 12)));
+        } else if constexpr (I8) {
+          // a0/a1 = (token e=0, token e=1) of dim 2j / 2j+1; scale each half by its token's v_scale
+          const int i0 = 2 * j, i1 = 2 * j + 1;
+          const uint32_t A0 = (i0 < 4) ? vr[ks][0].x : vr[ks][0].y, B0 = (i0 < 4) ? vr[ks][1].x : vr[ks][1].y;
+          const uint32_t b0 = i0 & 3, b1 = i1 & 3;
+          const half2 vs = __floats2half2_rn(sc[ks][0].y, sc[ks][1].y);
+          uint32_t x0 = (__byte_perm(A0, B0, b0 | ((4 + b0) << 8)) & 0x00ff00ffu) ^ 0x64806480u;
+          uint32_t x1 = (__byte_perm(A0, B0, b1 | ((4 + b1) << 8)) & 0x00ff00ffu) ^ 0x64806480u;
+          x0 = i8fix(x0); x1 = i8fix(x1);
+          half2 h0 = __hmul2(*reinterpret_cast<half2*>(&x0), vs), h1 = __hmul2(*reinterpret_cast<half2*>(&x1), vs);
+          a0 = *reinterpret_cast<uint32_t*>(&h0); a1 = *reinterpret_cast<uint32_t*>(&h1);
         } else {
           const uint32_t wa[4] = {vr[ks][0].x, vr[ks][0].y, vr[ks][0].z, vr[ks][0].w};
           const uint32_t wb[4] = {vr[ks][1].x, vr[ks][1].y, vr[ks][1].z, vr[ks][1].w};
@@ -322,27 +357,28 @@ __global__ void ta_merge(const float* __restrict__ o_part, const float* __restri
 
 // lse_part must hold -inf for chunks a CTA never writes (rows >= R are never read; empty chunks write -inf
 // themselves because l == 0), so no memset is needed.
-template <int MT, bool FP8>
+template <int MT, int FMT>
 void launch(const at::Tensor& q, const at::Tensor& kv, const at::Tensor& kv_indptr, const at::Tensor& kv_indices,
             const at::Tensor& kv_last, const at::Tensor& qo_indptr, at::Tensor& o_part, at::Tensor& lse_part,
             at::Tensor& out, int B, int HQ, int HK, int page, float scale_log2, float v_scale, int nch,
-            int min_tper, cudaStream_t st) {
+            int min_tper, const at::Tensor* sc, cudaStream_t st) {
   if (nch <= 0) {
     static int slots = 0;
     if (!slots) {
       int per_sm = 0, sms = 0, dev = 0;
       cudaGetDevice(&dev);
       cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
-      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, ta_partial<MT, FP8>, 128, 0);
+      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&per_sm, ta_partial<MT, FMT>, 128, 0);
       slots = per_sm * sms;
     }
     nch = std::max(1, slots / std::max(1, B * HK));
   }
   dim3 g1(nch, HK, B);
-  ta_partial<MT, FP8><<<g1, 128, 0, st>>>(
+  ta_partial<MT, FMT><<<g1, 128, 0, st>>>(
       reinterpret_cast<const half*>(q.data_ptr()), kv.data_ptr(), kv.stride(0), kv.stride(1), kv.stride(2), kv.stride(3),
       kv_indptr.data_ptr<int>(), kv_indices.data_ptr<int>(), kv_last.data_ptr<int>(), qo_indptr.data_ptr<int>(),
-      o_part.data_ptr<float>(), lse_part.data_ptr<float>(), page, HQ, HK, scale_log2, nch, min_tper);
+      o_part.data_ptr<float>(), lse_part.data_ptr<float>(), page, HQ, HK, scale_log2, nch, min_tper,
+      sc ? sc->data_ptr<float>() : nullptr, sc ? sc->stride(0) : 0, sc ? sc->stride(1) : 0, sc ? sc->stride(2) : 0);
   dim3 g2(MT * 16, HK, B);
   ta_merge<<<g2, D, 0, st>>>(o_part.data_ptr<float>(), lse_part.data_ptr<float>(),
                               reinterpret_cast<half*>(out.data_ptr()), qo_indptr.data_ptr<int>(), HQ, HK, nch, MT * 16,
@@ -352,12 +388,24 @@ void launch(const at::Tensor& q, const at::Tensor& kv, const at::Tensor& kv_indp
 
 at::Tensor run(at::Tensor q, at::Tensor kv, at::Tensor kv_indptr, at::Tensor kv_indices, at::Tensor kv_last,
                at::Tensor qo_indptr, double sm_scale, double k_scale, double v_scale, int64_t max_q_len, int64_t nch,
-               c10::optional<at::Tensor> out_opt, c10::optional<at::Tensor> ws_opt, int64_t min_tper) {
+               c10::optional<at::Tensor> out_opt, c10::optional<at::Tensor> ws_opt, int64_t min_tper,
+               c10::optional<at::Tensor> sc_opt) {
   TORCH_CHECK(q.scalar_type() == at::kHalf && q.dim() == 3 && q.size(2) == D && q.stride(2) == 1 && q.stride(1) == D,
               "q must be fp16 [T, HQ, 256] with contiguous heads");
   TORCH_CHECK(kv.dim() == 5 && kv.size(1) == 2 && kv.size(4) == D && kv.stride(4) == 1, "kv_cache must be [P,2,page,HK,256]");
   const bool fp8 = kv.scalar_type() == at::ScalarType::Float8_e4m3fn;
-  TORCH_CHECK(fp8 || kv.scalar_type() == at::kHalf, "kv_cache must be fp16 or float8_e4m3fn");
+  const bool i8 = kv.scalar_type() == at::kChar;
+  TORCH_CHECK(fp8 || i8 || kv.scalar_type() == at::kHalf, "kv_cache must be fp16, float8_e4m3fn or int8");
+  TORCH_CHECK(i8 == sc_opt.has_value(), "kv_scales must be given iff kv_cache is int8");
+  if (i8) {
+    const at::Tensor& sc = *sc_opt;
+    TORCH_CHECK(sc.scalar_type() == at::kFloat && sc.dim() == 4 && sc.size(0) == kv.size(0) && sc.size(1) == kv.size(2) &&
+                    sc.size(2) == kv.size(3) && sc.size(3) == 2 && sc.stride(3) == 1 &&
+                    (reinterpret_cast<uintptr_t>(sc.data_ptr()) & 7) == 0 && sc.stride(0) % 2 == 0 &&
+                    sc.stride(1) % 2 == 0 && sc.stride(2) % 2 == 0,
+                "kv_scales must be fp32 [P, page, HK, 2], last dim contiguous, 8-byte aligned pairs");
+  }
+  TORCH_CHECK((reinterpret_cast<uintptr_t>(kv.data_ptr()) & 15) == 0, "kv_cache must be 16-byte aligned");
   const int HQ = q.size(1), HK = kv.size(3), page = kv.size(2);
   TORCH_CHECK(HQ % HK == 0, "HQ % HK");
   const int B = qo_indptr.size(0) - 1;
@@ -378,9 +426,11 @@ at::Tensor run(at::Tensor q, at::Tensor kv, at::Tensor kv_indptr, at::Tensor kv_
                                       q.options().dtype(at::kFloat));
   const float scale_log2 = (float)(sm_scale * k_scale * 1.4426950408889634);
   cudaStream_t st = c10::cuda::getCurrentCUDAStream().stream();
-#define TA_L(MT_, F_) launch<MT_, F_>(q, kv, kv_indptr, kv_indices, kv_last, qo_indptr, o_part, lse_part, out, B, HQ, HK, page, scale_log2, (float)v_scale, (int)nch, (int)std::max<int64_t>(1, min_tper), st)
-  if (fp8) { if (MT == 1) TA_L(1, true); else if (MT == 2) TA_L(2, true); else TA_L(3, true); }
-  else { if (MT == 1) TA_L(1, false); else if (MT == 2) TA_L(2, false); else TA_L(3, false); }
+  const at::Tensor* scp = sc_opt.has_value() ? &*sc_opt : nullptr;
+#define TA_L(MT_, F_) launch<MT_, F_>(q, kv, kv_indptr, kv_indices, kv_last, qo_indptr, o_part, lse_part, out, B, HQ, HK, page, scale_log2, (float)v_scale, (int)nch, (int)std::max<int64_t>(1, min_tper), scp, st)
+  if (i8) { if (MT == 1) TA_L(1, 2); else if (MT == 2) TA_L(2, 2); else TA_L(3, 2); }
+  else if (fp8) { if (MT == 1) TA_L(1, 1); else if (MT == 2) TA_L(2, 1); else TA_L(3, 1); }
+  else { if (MT == 1) TA_L(1, 0); else if (MT == 2) TA_L(2, 0); else TA_L(3, 0); }
 #undef TA_L
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return out;
