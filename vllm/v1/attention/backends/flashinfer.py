@@ -106,6 +106,18 @@ FP4_DTYPE = torch.uint8
 
 logger = init_logger(__name__)
 
+# VLLM_TURING_ATTN=1: route small-q_len paged attention (decode, and prefill
+# sub-batches whose every request has q_len <= VLLM_TURING_ATTN_MAX_Q, i.e.
+# MTP verify / draft position 0) to the custom `turing_attn.run` op. Off by
+# default; with it off nothing below changes behaviour.
+_TURING_ATTN = os.environ.get("VLLM_TURING_ATTN", "0") == "1"
+_TURING_ATTN_MAX_Q = int(os.environ.get("VLLM_TURING_ATTN_MAX_Q", "8"))
+_turing_attn_run = None
+if _TURING_ATTN:
+    import turing_attn as _turing_attn_mod
+
+    _turing_attn_run = _turing_attn_mod.run
+
 trtllm_workspace_buffer = None
 
 
@@ -624,6 +636,19 @@ class FIPrefill:
 
 
 @dataclass
+class TuringAttnMeta:
+    """Metadata for turing_attn.run (VLLM_TURING_ATTN=1). Device int32 tensors
+    in FlashInfer paged format, zero-based; slices of persistent buffers when
+    the sub-batch starts at request 0 (CUDA-graph safe)."""
+
+    kv_indptr: torch.Tensor
+    kv_indices: torch.Tensor
+    kv_last_page_len: torch.Tensor
+    qo_indptr: torch.Tensor
+    max_q_len: int
+
+
+@dataclass
 class FIDecode:
     """Metadata for the native FlashInfer decode pathway (non-TRTLLM)."""
 
@@ -998,6 +1023,32 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
         self.paged_kv_last_page_len = CpuGpuBuffer(
             max_num_reqs, dtype=torch.int32, device=self.device, pin_memory=False
         )
+        self.use_turing_attn = (
+            _TURING_ATTN
+            and not self.use_dcp
+            and not self.is_kvcache_nvfp4
+            and not self.has_sinks
+            and not self.use_trtllm_decode_attention
+            and self.window_left == -1
+            and not self.logits_soft_cap
+            and self.q_data_type_prefill == torch.float16
+            and self.q_data_type_decode == torch.float16
+            and self.kv_cache_dtype in (torch.float16, torch.float8_e4m3fn)
+        )
+        if _TURING_ATTN:
+            logger.info_once(
+                "VLLM_TURING_ATTN=1: turing_attn %s (max_q=%d, kv_dtype=%s)",
+                "ENABLED" if self.use_turing_attn else "NOT eligible",
+                _TURING_ATTN_MAX_Q,
+                self.kv_cache_dtype,
+            )
+        if self.use_turing_attn:
+            # Decode q_len is 1: qo_indptr = arange; persistent for CUDA graphs.
+            self._turing_qo_arange = torch.arange(
+                max(max_num_reqs * (1 + num_spec_tokens), max_num_reqs) + 1,
+                dtype=torch.int32,
+                device=self.device,
+            )
 
     @property
     def kv_cache_layout(self) -> KVCacheLayout:
@@ -1672,7 +1723,48 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
             )
             assert qo_indptr_prefill_cpu.shape[0] == num_prefills + 1
 
-            if prefill_use_trtllm:
+            turing_max_q = (
+                int((qo_indptr_prefill_cpu[1:] - qo_indptr_prefill_cpu[:-1]).max())
+                if self.use_turing_attn
+                else 0
+            )
+            use_turing_prefill = (
+                self.use_turing_attn
+                and causal
+                and not prefill_use_trtllm
+                and turing_max_q <= _TURING_ATTN_MAX_Q
+            )
+            if use_turing_prefill:
+                assert paged_kv_indices is not None
+                if prefill_start == 0:
+                    # Slices of persistent buffers (stable addresses).
+                    attn_metadata.prefill = TuringAttnMeta(
+                        kv_indptr=self.paged_kv_indptr.gpu[: num_reqs + 1],
+                        kv_indices=self.paged_kv_indices,
+                        kv_last_page_len=self.paged_kv_last_page_len.gpu[:num_reqs],
+                        qo_indptr=qo_indptr[: num_reqs + 1],
+                        max_q_len=turing_max_q,
+                    )
+                else:
+                    # Mixed decode+prefill batch (never graph-captured):
+                    # rebase to zero; the page offset is known on the CPU.
+                    kv_off = int(self.paged_kv_indptr.np[prefill_start])
+                    attn_metadata.prefill = TuringAttnMeta(
+                        kv_indptr=(
+                            self.paged_kv_indptr.gpu[prefill_start : num_reqs + 1]
+                            - kv_off
+                        ),
+                        kv_indices=self.paged_kv_indices[kv_off:],
+                        kv_last_page_len=self.paged_kv_last_page_len.gpu[
+                            prefill_start:num_reqs
+                        ],
+                        qo_indptr=(
+                            qo_indptr[prefill_start : num_reqs + 1]
+                            - qo_indptr[prefill_start]
+                        ),
+                        max_q_len=turing_max_q,
+                    )
+            elif prefill_use_trtllm:
                 # TRTLLM prefill has no cross-rank combine for DCP-sharded KV;
                 # use_trtllm_attention never selects it when DCP is enabled.
                 assert not self.use_dcp
@@ -1860,6 +1952,17 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                     dcp_query_start_loc=(
                         qo_indptr[: num_decodes + 1] if self.use_dcp else None
                     ),
+                )
+            elif self.use_turing_attn and causal:
+                # reorder threshold is 1 here, so every decode has q_len 1.
+                assert num_decode_tokens == num_decodes
+                assert paged_kv_indices is not None
+                attn_metadata.decode = TuringAttnMeta(
+                    kv_indptr=self.paged_kv_indptr.gpu[: num_decodes + 1],
+                    kv_indices=self.paged_kv_indices,
+                    kv_last_page_len=self.paged_kv_last_page_len.gpu[:num_decodes],
+                    qo_indptr=self._turing_qo_arange[: num_decodes + 1],
+                    max_q_len=1,
                 )
             else:
                 assert seq_lens_cpu is not None
@@ -2285,6 +2388,15 @@ class FlashInferImpl(AttentionImpl):
         else:
             kv_cache_tuple = kv_cache_permute.split(hs, dim=-1)
 
+        if isinstance(attn_metadata.prefill, TuringAttnMeta) or isinstance(
+            attn_metadata.decode, TuringAttnMeta
+        ):
+            # Logical per-layer view is [B, H, N, 2*hs] (K | V in the content
+            # dim) with layout-dependent strides -> zero-copy strided view
+            # [B, 2, N, H, hs]; turing_attn must honour the strides.
+            turing_kv = kv_cache.unflatten(-1, (2, hs)).permute(0, 3, 2, 1, 4)
+            turing_sm_scale = self.scale * layer._q_scale_float
+
         use_dcp = self.dcp_world_size > 1
         if decode_with_xqa:
             assert not use_dcp
@@ -2304,7 +2416,22 @@ class FlashInferImpl(AttentionImpl):
                 layer._q_scale,
             )
 
-            if not prefill_use_trtllm:
+            if isinstance(attn_metadata.prefill, TuringAttnMeta):
+                tm = attn_metadata.prefill
+                _turing_attn_run(
+                    prefill_query,
+                    turing_kv,
+                    tm.kv_indptr,
+                    tm.kv_indices,
+                    tm.kv_last_page_len,
+                    tm.qo_indptr,
+                    turing_sm_scale,
+                    layer._k_scale_float,
+                    layer._v_scale_float,
+                    out=output[num_decode_tokens:],
+                    max_q_len=tm.max_q_len,
+                )
+            elif not prefill_use_trtllm:
                 assert isinstance(attn_metadata.prefill, FIPrefill)
                 prefill_wrapper = attn_metadata.prefill.wrapper
                 assert prefill_wrapper is not None
@@ -2518,7 +2645,22 @@ class FlashInferImpl(AttentionImpl):
                 layer._q_scale,
             )
 
-            if not decode_with_flashinfer_trtllm_api:
+            if isinstance(attn_metadata.decode, TuringAttnMeta):
+                tm = attn_metadata.decode
+                _turing_attn_run(
+                    decode_query,
+                    turing_kv,
+                    tm.kv_indptr,
+                    tm.kv_indices,
+                    tm.kv_last_page_len,
+                    tm.qo_indptr,
+                    turing_sm_scale,
+                    layer._k_scale_float,
+                    layer._v_scale_float,
+                    out=output[:num_decode_tokens],
+                    max_q_len=1,
+                )
+            elif not decode_with_flashinfer_trtllm_api:
                 assert isinstance(attn_metadata.decode, FIDecode)
                 decode_wrapper = attn_metadata.decode.wrapper
                 assert decode_wrapper is not None
